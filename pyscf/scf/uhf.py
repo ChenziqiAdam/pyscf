@@ -1065,38 +1065,6 @@ This is the Gaussian fit version as described in doi:10.1063/5.0004046.''')
                         '<S^2> = %.8g  2S+1 = %.8g',
                         self.e_tot, self.max_cycle, ss, s)
 
-        try:
-            from pyscf import _scientific_checkers as _sc
-            if _sc.enabled() and self.converged:
-                _s_nominal = self.mol.spin / 2.0
-                _expected = _s_nominal * (_s_nominal + 1)
-                # Precondition fence: exclude solutions that plausibly
-                # represent *deliberate* broken-symmetry UHF (e.g. modeling
-                # homolytic bond dissociation), a standard, intentional
-                # technique this law does not apply to -- distinguished from
-                # ordinary, unintentional radical spin contamination by the
-                # alpha/beta occupied-subspace alignment: an ordinary
-                # radical's alpha and beta occupied orbitals span nearly the
-                # same subspace (singular values of the S-weighted overlap
-                # near 1); genuine symmetry breaking visibly separates the
-                # two subspaces. Cheap (one more matrix product on
-                # already-computed mo_coeff/mo_occ, no extra SCF solve).
-                # See repo-root PROGRESS.md, PS-UHF-001 fix.
-                _ca, _cb = self.mo_coeff
-                _occa, _occb = self.mo_occ
-                _nocc_a = int(round(_occa.sum()))
-                _nocc_b = int(round(_occb.sum()))
-                if _nocc_a > 0 and _nocc_b > 0:
-                    _ovlp_ab = (_ca[:, :_nocc_a].T
-                                @ self.get_ovlp()
-                                @ _cb[:, :_nocc_b])
-                    _min_sval = numpy.linalg.svd(_ovlp_ab, compute_uv=False).min()
-                    _contamination_ok = (abs(ss - _expected) < 1.0
-                                          and _min_sval > 0.9)
-                    _sc.check_uhf_spin_square_consistency(ss, self.mol.spin, _contamination_ok)
-        except Exception:
-            pass
-
         return self
 
     def convert_from_(self, mf):

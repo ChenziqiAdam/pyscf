@@ -253,27 +253,20 @@ def check_orbital_irrep_purity(largest_norm):
 # Subsystem 4: scf/uhf.py
 # ---------------------------------------------------------------------------
 
-@_guard
-def check_uhf_spin_square_consistency(ss, spin, contamination_ok):
-    """PS-UHF-001: <S^2> matches S(S+1) for a symmetry-unbroken UHF solution.
-
-    contamination_ok now additionally requires the alpha/beta occupied
-    subspaces to still be closely aligned (min singular value of their
-    S-weighted overlap > 0.9), not just |ss-expected|<1.0 -- the old gate
-    alone could not distinguish ordinary radical contamination from
-    deliberate broken-symmetry UHF at bond dissociation (both fall under
-    |ss-expected|<1.0), which is standard, intentional physics this law
-    does not apply to. See repo-root PROGRESS.md, PS-UHF-001 fix.
-    """
-    if not contamination_ok:
-        return
-    s_nominal = spin / 2.0
-    expected = s_nominal * (s_nominal + 1)
-    tol = 0.05  # derived empirically: worst observed |ss - expected| was 0.0088
-    #             across 4 open-shell radicals with mild, chemically ordinary
-    #             spin contamination; set with ~5x headroom above that.
-    diff = abs(ss - expected)
-    trigger_if(diff > tol, "PS-UHF-001", diff=diff, tol=tol)
+# PS-UHF-001 (<S^2> vs. nominal spin state) shipped, was fixed once after
+# round-1 triggerability (added an alpha/beta occupied-subspace alignment
+# gate alongside the original |ss-expected|<1.0 band), then REMOVED entirely
+# after round-2 triggerability found the two-independent-threshold design is
+# structurally unsound: gating a continuous quantity (the alarm) behind two
+# separately-calibrated thresholds on two independently-varying continuous
+# quantities (|ss-expected|<1.0 and min_sval>0.9) necessarily leaves a
+# narrow input window where one threshold crosses before the other, no
+# matter how the two constants are tuned (confirmed on H2 at 1.24-1.26
+# Angstrom bond length -- not a PySCF defect, a design defect in the
+# checker's own precondition-gating method). User decision (2026-09-17):
+# this is a method-level disqualification, not a fixable tolerance gap --
+# remove the candidate rather than attempt a third iteration. See repo-root
+# PROGRESS.md.
 
 
 @_guard
