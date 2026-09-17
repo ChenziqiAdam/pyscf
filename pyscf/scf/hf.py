@@ -245,8 +245,19 @@ Keyword argument "init_dm" is replaced by "dm0"''')
             if numpy.allclose(mo_occ, mo_occ.astype(int)) and set(numpy.unique(mo_occ)) <= {0.0, 2.0}:
                 _sc.check_rdm1_idempotency(dm, s1e)
             _pop = numpy.einsum('ij,ji->i', dm, s1e).real
+            # AtomSphAverageRHF's average-of-configuration atomic guess
+            # (init_guess='atom'/'huckel') reuses this same kernel() for its
+            # internal per-atom sub-solve, whose mo_occ is documented to be
+            # fractional by construction (atom_hf.py's frac_occ) -- not a
+            # violation of electron-count conservation, just a different,
+            # non-integer-valued law. The exact-integer mo_occ_sum half only
+            # applies to the outer SCF object a user actually runs; the
+            # trace(D S) half is unaffected (it never reads mo_occ) and stays
+            # checked on both.
+            _mo_occ_sum = (None if type(mf).__name__ == 'AtomSphAverageRHF'
+                           else float(numpy.sum(mo_occ)))
             _sc.check_electron_count_conservation(
-                mol, float(_pop.sum()), float(numpy.sum(mo_occ)))
+                mol, float(_pop.sum()), _mo_occ_sum)
     except Exception:
         pass
 
@@ -739,8 +750,19 @@ def init_guess_by_chkfile(mol, chkfile_name, project=None):
     try:
         from pyscf import _scientific_checkers as _sc
         if _sc.enabled():
-            _s_check = get_ovlp(mol)
-            _sc.check_chkfile_restore_electron_count(mol, numpy.asarray(dm), _s_check, project)
+            # This law was derived (and only makes physical sense) for
+            # restoring a checkpoint onto the *same* chemical system (same
+            # or different basis/geometry); PySCF's own inertia-moment
+            # dissimilarity check just above (im1/im2) already flags a
+            # cross-molecule/very-dissimilar-geometry restore as an
+            # explicitly poor initial guess -- reuse that same signal to
+            # keep this checker in scope rather than firing on inputs its
+            # own tolerance derivation never covered. See repo-root
+            # PROGRESS.md, PS-SCF-006 fix.
+            _same_system = abs((im1 - im2) / (im1 + 1e-7)).max() <= 0.01
+            if _same_system:
+                _s_check = get_ovlp(mol)
+                _sc.check_chkfile_restore_electron_count(mol, numpy.asarray(dm), _s_check, project)
     except Exception:
         pass
 

@@ -117,7 +117,14 @@ def check_rdm1_idempotency(dm, s):
 
 @_guard
 def check_electron_count_conservation(mol, pop_sum, mo_occ_sum):
-    """PS-SCF-002: Mulliken population sum and mo_occ sum both equal nelectron."""
+    """PS-SCF-002: Mulliken population sum and mo_occ sum both equal nelectron.
+
+    mo_occ_sum is None for AtomSphAverageRHF's internal average-of-
+    configuration atomic sub-solve (init_guess='atom'/'huckel'), whose
+    mo_occ is documented to be fractional by construction -- the
+    exact-integer half of this law only applies to the outer SCF object a
+    user actually runs. See repo-root PROGRESS.md, PS-SCF-002 fix.
+    """
     nelec = mol.nelectron
     nao = mol.nao
     tol_trace = 50.0 * eps64 * nao
@@ -125,10 +132,11 @@ def check_electron_count_conservation(mol, pop_sum, mo_occ_sum):
         abs(pop_sum - nelec) > tol_trace, "PS-SCF-002",
         family="mulliken_trace", diff=abs(pop_sum - nelec), tol=tol_trace,
     )
-    trigger_if(
-        mo_occ_sum != nelec, "PS-SCF-002",
-        family="mo_occ_sum", mo_occ_sum=mo_occ_sum, nelectron=nelec,
-    )
+    if mo_occ_sum is not None:
+        trigger_if(
+            mo_occ_sum != nelec, "PS-SCF-002",
+            family="mo_occ_sum", mo_occ_sum=mo_occ_sum, nelectron=nelec,
+        )
 
 
 @_guard
@@ -189,9 +197,22 @@ def check_mp2_energy_sign(emp2, e_hf):
 
 @_guard
 def check_mp2_t2_symmetry(t2):
-    """PS-MP2-002: t2[i,j,a,b] == t2[j,i,b,a]."""
+    """PS-MP2-002: t2[i,j,a,b] == t2[j,i,b,a].
+
+    Canonical MP2's t2 is built once from the AO2MO-transformed ovov
+    integral with no explicit resymmetrization step (unlike CCSD's
+    iterative update_amps, which resymmetrizes every cycle and empirically
+    shows zero asymmetry at any basis size -- see PS-CC-001). t2's
+    asymmetry is inherited unchanged from ovov's own two-pass
+    (half_e1/nr_e2) floating-point asymmetry, which grows with problem
+    size; a flat eps64 tolerance under-budgets this. Re-derived from a
+    7-basis H2 sweep (cc-pvdz through aug-cc-pv5z, nao 10-160): worst
+    observed max|t2-t2.T|/(eps64*nao**1.5) ratio was 1.30 (aug-cc-pv5z).
+    See repo-root PROGRESS.md, PS-MP2-002 fix.
+    """
     diff = np.abs(t2 - t2.transpose(1, 0, 3, 2)).max()
-    tol = 50.0 * eps64
+    nao = t2.shape[0] + t2.shape[2]  # nocc + nvir == nao for canonical MP2
+    tol = 50.0 * eps64 * nao ** 1.5
     trigger_if(diff > tol, "PS-MP2-002", diff=diff, tol=tol)
 
 
@@ -234,7 +255,16 @@ def check_orbital_irrep_purity(largest_norm):
 
 @_guard
 def check_uhf_spin_square_consistency(ss, spin, contamination_ok):
-    """PS-UHF-001: <S^2> matches S(S+1) for a symmetry-unbroken UHF solution."""
+    """PS-UHF-001: <S^2> matches S(S+1) for a symmetry-unbroken UHF solution.
+
+    contamination_ok now additionally requires the alpha/beta occupied
+    subspaces to still be closely aligned (min singular value of their
+    S-weighted overlap > 0.9), not just |ss-expected|<1.0 -- the old gate
+    alone could not distinguish ordinary radical contamination from
+    deliberate broken-symmetry UHF at bond dissociation (both fall under
+    |ss-expected|<1.0), which is standard, intentional physics this law
+    does not apply to. See repo-root PROGRESS.md, PS-UHF-001 fix.
+    """
     if not contamination_ok:
         return
     s_nominal = spin / 2.0
@@ -306,7 +336,16 @@ def check_uks_grid_electron_count(n_grid_tuple, dm, s):
 
 @_guard
 def check_ccsd_t2_symmetry(t2):
-    """PS-CC-001: CCSD t2[i,j,a,b] == t2[j,i,b,a] survives the DIIS round trip."""
+    """PS-CC-001: CCSD t2[i,j,a,b] == t2[j,i,b,a] survives the DIIS round trip.
+
+    Unlike PS-MP2-002, CCSD's update_amps explicitly resymmetrizes t2 every
+    iteration, which empirically eliminates the same AO2MO-inherited
+    asymmetry that forced PS-MP2-002 onto a size-scaled tolerance: the same
+    7-basis H2 sweep used to re-derive PS-MP2-002 (cc-pvdz through
+    aug-cc-pv5z, nao 10-160) measured exactly 0.0 CCSD t2 asymmetry at
+    every basis size. The flat 50*eps64 tolerance is left as is. See
+    repo-root PROGRESS.md, PS-MP2-002 fix (same entry documents this check).
+    """
     diff = np.abs(t2 - t2.transpose(1, 0, 3, 2)).max()
     tol = 50.0 * eps64
     trigger_if(diff > tol, "PS-CC-001", diff=diff, tol=tol)

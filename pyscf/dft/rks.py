@@ -82,7 +82,16 @@ def get_veff(ks, mol=None, dm=None, dm_last=0, vhf_last=0, hermi=1):
 
         try:
             from pyscf import _scientific_checkers as _sc
-            if _sc.enabled() and ground_state:
+            # Tolerance was calibrated only for PySCF's default grid level
+            # (sanitizers.json's own tolerance_derivation says so); an
+            # explicitly coarser grid produces real, expected quadrature
+            # error this law was never scoped to cover. Compare against the
+            # library's own current default rather than a hardcoded "3", so
+            # this stays correct if the default is ever changed upstream.
+            # See repo-root PROGRESS.md, PS-DFT-001 fix.
+            from pyscf.dft.gen_grid import Grids as _Grids
+            _default_level = _Grids.level
+            if _sc.enabled() and ground_state and ks.grids.level >= _default_level:
                 _s = ks.get_ovlp(mol)
                 _sc.check_dft_grid_electron_count(n, dm, _s)
 
