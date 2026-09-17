@@ -83,8 +83,15 @@ def label_orb_symm(mol, irrep_name, symm_orb, mo, s=None,
     orbsym = numpy.asarray([irrep_name[i] for i in iridx])
     logger.debug(mol, 'irreps of each MO %s', orbsym)
 
+    largest_norm = norm[iridx,numpy.arange(nmo)]
+    try:
+        from pyscf import _scientific_checkers as _sc
+        if _sc.enabled():
+            _sc.check_orbital_irrep_purity(largest_norm)
+    except Exception:
+        pass
+
     if check:
-        largest_norm = norm[iridx,numpy.arange(nmo)]
         orbidx = numpy.where(largest_norm < 1-tol)[0]
         if orbidx.size > 0:
             idx = numpy.where(largest_norm < 1-tol*1e2)[0]

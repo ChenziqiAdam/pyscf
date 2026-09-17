@@ -73,6 +73,18 @@ def kernel(mp, mo_energy=None, mo_coeff=None, eris=None, with_t2=WITH_T2, verbos
     emp2_os = emp2_os.real
     emp2 = lib.tag_array(emp2_ss+emp2_os, e_corr_ss=emp2_ss, e_corr_os=emp2_os)
 
+    try:
+        from pyscf import _scientific_checkers as _sc
+        if _sc.enabled():
+            _frozen = getattr(mp, 'frozen', None)
+            _canonical = _frozen in (0, None) or (isinstance(_frozen, int) and _frozen == 0)
+            if _canonical:
+                _sc.check_mp2_energy_sign(float(emp2.real), float(mp._scf.e_tot))
+            if t2 is not None:
+                _sc.check_mp2_t2_symmetry(numpy.asarray(t2))
+    except Exception:
+        pass
+
     return emp2.real, t2
 
 
@@ -169,8 +181,17 @@ def make_rdm1(mp, t2=None, eris=None, ao_repr=False, with_frozen=True):
     nvir = dvv.shape[0]
     dov = numpy.zeros((nocc,nvir), dtype=doo.dtype)
     dvo = dov.T
-    return ccsd_rdm._make_rdm1(mp, (doo, dov, dvo, dvv), with_frozen=with_frozen,
+    dm1 = ccsd_rdm._make_rdm1(mp, (doo, dov, dvo, dvv), with_frozen=with_frozen,
                                ao_repr=ao_repr)
+
+    try:
+        from pyscf import _scientific_checkers as _sc
+        if _sc.enabled() and with_frozen and not ao_repr:
+            _sc.check_mp2_rdm1_trace(numpy.asarray(dm1), mp.mol.nelectron, mp.nmo)
+    except Exception:
+        pass
+
+    return dm1
 
 def _gamma1_intermediates(mp, t2=None, eris=None):
     if t2 is None: t2 = mp.t2

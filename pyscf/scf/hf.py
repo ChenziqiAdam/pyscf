@@ -237,6 +237,19 @@ Keyword argument "init_dm" is replaced by "dm0"''')
     logger.timer(mf, 'scf_cycle', *cput0)
     # A post-processing hook before return
     mf.post_kernel(locals())
+
+    try:
+        from pyscf import _scientific_checkers as _sc
+        if _sc.enabled() and scf_conv and mo_coeff is not None and mo_coeff.ndim == 2:
+            _sc.check_mo_orthonormality(mo_coeff, s1e)
+            if numpy.allclose(mo_occ, mo_occ.astype(int)) and set(numpy.unique(mo_occ)) <= {0.0, 2.0}:
+                _sc.check_rdm1_idempotency(dm, s1e)
+            _pop = numpy.einsum('ij,ji->i', dm, s1e).real
+            _sc.check_electron_count_conservation(
+                mol, float(_pop.sum()), float(numpy.sum(mo_occ)))
+    except Exception:
+        pass
+
     return scf_conv, e_tot, mo_energy, mo_coeff, mo_occ
 
 
@@ -722,6 +735,15 @@ def init_guess_by_chkfile(mol, chkfile_name, project=None):
         s = get_ovlp(mol)
         _, mo_coeff = scipy.linalg.eigh(dm, s, type=2)
         dm = lib.tag_array(dm, mo_coeff=mo_coeff[:,::-1], mo_occ=mo_occ)
+
+    try:
+        from pyscf import _scientific_checkers as _sc
+        if _sc.enabled():
+            _s_check = get_ovlp(mol)
+            _sc.check_chkfile_restore_electron_count(mol, numpy.asarray(dm), _s_check, project)
+    except Exception:
+        pass
+
     return dm
 
 def init_guess_by_sap(mol, sap_basis, **kwargs):
@@ -1362,6 +1384,18 @@ def canonicalize(mf, mo_coeff, mo_occ, fock=None):
             e, c = scipy.linalg.eigh(f1)
             mo[:,idx] = numpy.dot(orb, c)
             mo_e[idx] = e
+
+    try:
+        from pyscf import _scientific_checkers as _sc
+        if _sc.enabled():
+            _s = mf.get_ovlp()
+            _dm_before = mf.make_rdm1(mo_coeff, mo_occ)
+            _dm_after = mf.make_rdm1(mo, mo_occ)
+            _sc.check_canonicalization_density_invariance(
+                numpy.asarray(_dm_before), numpy.asarray(_dm_after), _s, mo_coeff.shape[0])
+    except Exception:
+        pass
+
     return mo_e, mo
 
 def dip_moment(mol, dm, unit='Debye', origin=None, verbose=logger.NOTE, **kwargs):
@@ -1415,6 +1449,19 @@ def dip_moment(mol, dm, unit='Debye', origin=None, verbose=logger.NOTE, **kwargs
     el_dip = numpy.einsum('xij,ji->x', ao_dip, dm).real
     nucl_dip = numpy.einsum('i,ix->x', charges, coords - origin[None, :])
     mol_dip = nucl_dip - el_dip
+
+    if not kwargs.get('_scibench_recall', False):
+        try:
+            from pyscf import _scientific_checkers as _sc
+            if _sc.enabled() and mol.charge == 0:
+                _shift = origin + numpy.array([0.37, 0.0, 0.0])
+                _dip2 = dip_moment(mol, dm, unit='AU', origin=_shift,
+                                    verbose=logger.NOTE, _scibench_recall=True)
+                # mol_dip here is always in AU (the Debye rescale below has
+                # not happened yet at this point in the function).
+                _sc.check_dipole_origin_invariance(mol, mol_dip, _dip2, origin, _shift)
+        except Exception:
+            pass
 
     if unit.upper() == 'DEBYE':
         mol_dip *= nist.AU2DEBYE

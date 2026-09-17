@@ -320,6 +320,15 @@ def get_occ(mf, mo_energy=None, mo_coeff=None):
         ss, s = mf.spin_square((mo_coeff[0][:,mo_occ[0]>0],
                                 mo_coeff[1][:,mo_occ[1]>0]), mf.get_ovlp())
         logger.debug(mf, 'multiplicity <S^2> = %.8g  2S+1 = %.8g', ss, s)
+
+    try:
+        from pyscf import _scientific_checkers as _sc
+        if _sc.enabled():
+            _sc.check_uhf_electron_count_conservation(
+                int(mo_occ[0].sum()), int(mo_occ[1].sum()), mf.mol.nelectron, mf.mol.spin)
+    except Exception:
+        pass
+
     return mo_occ
 
 def get_grad(mo_coeff, mo_occ, fock_ao):
@@ -1055,6 +1064,22 @@ This is the Gaussian fit version as described in doi:10.1063/5.0004046.''')
             logger.note(self, 'SCF energy = %.15g after %d cycles  '
                         '<S^2> = %.8g  2S+1 = %.8g',
                         self.e_tot, self.max_cycle, ss, s)
+
+        try:
+            from pyscf import _scientific_checkers as _sc
+            if _sc.enabled() and self.converged:
+                _s_nominal = self.mol.spin / 2.0
+                _expected = _s_nominal * (_s_nominal + 1)
+                # "mildly non-orthogonal" precondition fence: only treat as a
+                # symmetry-unbroken solution if the raw contamination
+                # (ss - expected) is itself small relative to S(S+1) or an
+                # O(1) absolute band -- a genuinely spin-broken solution
+                # (large contamination) is out of this law's scope by design.
+                _contamination_ok = abs(ss - _expected) < 1.0
+                _sc.check_uhf_spin_square_consistency(ss, self.mol.spin, _contamination_ok)
+        except Exception:
+            pass
+
         return self
 
     def convert_from_(self, mf):

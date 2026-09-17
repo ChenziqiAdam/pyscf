@@ -35,6 +35,7 @@ def kernel(localizer, mo_coeff=None, callback=None, verbose=None):
     from pyscf.tools import mo_mapping
     if mo_coeff is not None:
         localizer.mo_coeff = numpy.asarray(mo_coeff, order='C')
+    _orig_mo_coeff = localizer.mo_coeff.copy()
     if localizer.mo_coeff.shape[1] <= 1:
         return localizer.mo_coeff
 
@@ -100,6 +101,18 @@ def kernel(localizer, mo_coeff=None, callback=None, verbose=None):
 # possible to the corresponding input orbitals
     sorted_idx = mo_mapping.mo_1to1map(u0)
     localizer.mo_coeff = lib.dot(localizer.mo_coeff, u0[:,sorted_idx])
+
+    try:
+        from pyscf import _scientific_checkers as _sc
+        if _sc.enabled():
+            _s = localizer.mol.intor_symmetric('int1e_ovlp')
+            _dm_before = 2.0 * _orig_mo_coeff @ _orig_mo_coeff.conj().T
+            _dm_after = 2.0 * localizer.mo_coeff @ localizer.mo_coeff.conj().T
+            _sc.check_localization_density_invariance(
+                _dm_before, _dm_after, _s, _orig_mo_coeff.shape[0], imacro + 1)
+    except Exception:
+        pass
+
     return localizer.mo_coeff
 
 

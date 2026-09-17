@@ -98,6 +98,14 @@ def kernel(mycc, eris=None, t1=None, t2=None, max_cycle=50, tol=1e-8,
             converged = True
             break
     log.timer(name, *cput0)
+
+    try:
+        from pyscf import _scientific_checkers as _sc
+        if _sc.enabled() and isinstance(t2, numpy.ndarray) and t2.ndim == 4:
+            _sc.check_ccsd_t2_symmetry(t2)
+    except Exception:
+        pass
+
     return converged, eccsd, t1, t2
 
 
@@ -1345,8 +1353,15 @@ class CCSD(CCSDBase):
         if l1 is None: l1 = self.l1
         if l2 is None: l2 = self.l2
         if l1 is None: l1, l2 = self.solve_lambda(t1, t2)
-        return ccsd_rdm.make_rdm1(self, t1, t2, l1, l2, ao_repr=ao_repr,
+        _dm1_result = ccsd_rdm.make_rdm1(self, t1, t2, l1, l2, ao_repr=ao_repr,
                                   with_frozen=with_frozen, with_mf=with_mf)
+        try:
+            from pyscf import _scientific_checkers as _sc
+            if _sc.enabled() and with_frozen and not ao_repr:
+                _sc.check_ccsd_rdm1_trace(numpy.asarray(_dm1_result), self.mol.nelectron, self.nmo)
+        except Exception:
+            pass
+        return _dm1_result
 
     def make_rdm2(self, t1=None, t2=None, l1=None, l2=None, ao_repr=False,
                   with_frozen=True, with_dm1=True):

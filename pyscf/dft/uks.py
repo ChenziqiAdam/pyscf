@@ -51,6 +51,15 @@ def get_veff(ks, mol=None, dm=None, dm_last=0, vhf_last=0, hermi=1):
         max_memory = ks.max_memory - lib.current_memory()[0]
         n, exc, vxc = ni.nr_uks(mol, ks.grids, ks.xc, dm, max_memory=max_memory)
         logger.debug(ks, 'nelec by numeric integration = %s', n)
+
+        try:
+            from pyscf import _scientific_checkers as _sc
+            if _sc.enabled() and ground_state and isinstance(n, tuple) and len(n) == 2:
+                _s = ks.get_ovlp(mol)
+                _sc.check_uks_grid_electron_count(n, dm, _s)
+        except Exception:
+            pass
+
         if ks.do_nlc():
             if ni.libxc.is_nlc(ks.xc):
                 xc = ks.xc

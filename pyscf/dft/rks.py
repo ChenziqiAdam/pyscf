@@ -79,6 +79,32 @@ def get_veff(ks, mol=None, dm=None, dm_last=0, vhf_last=0, hermi=1):
         max_memory = ks.max_memory - lib.current_memory()[0]
         n, exc, vxc = ni.nr_rks(mol, ks.grids, ks.xc, dm, max_memory=max_memory)
         logger.debug(ks, 'nelec by numeric integration = %s', n)
+
+        try:
+            from pyscf import _scientific_checkers as _sc
+            if _sc.enabled() and ground_state:
+                _s = ks.get_ovlp(mol)
+                _sc.check_dft_grid_electron_count(n, dm, _s)
+
+                # PS-NUMINT-001: eval_rho (density-matrix path, used above via
+                # make_rho/_gen_rho_evaluator) vs eval_rho2 (MO-coefficient
+                # path), cross-checked whenever a converged mo_coeff/mo_occ
+                # pair generating this exact dm is available.
+                if (getattr(ks, 'mo_coeff', None) is not None
+                        and getattr(ks, 'mo_occ', None) is not None
+                        and ks.mo_coeff.ndim == 2):
+                    _occ_idx = ks.mo_occ > 0
+                    _mo_occ_coeff = ks.mo_coeff[:, _occ_idx]
+                    _mo_occ_vals = ks.mo_occ[_occ_idx]
+                    _reconstructed_dm = (_mo_occ_coeff * _mo_occ_vals) @ _mo_occ_coeff.conj().T
+                    if numpy.abs(_reconstructed_dm - dm).max() < 1e-8:
+                        _coords = ks.grids.coords[:500]
+                        _ao = ni.eval_ao(mol, _coords, deriv=0)
+                        _rho1 = ni.eval_rho(mol, _ao, dm, xctype='LDA', hermi=1)
+                        _rho2 = ni.eval_rho2(mol, _ao, _mo_occ_coeff, _mo_occ_vals, xctype='LDA')
+                        _sc.check_grid_density_representation_consistency(_rho1, _rho2, mol.nao)
+        except Exception:
+            pass
         if ks.do_nlc():
             if ni.libxc.is_nlc(ks.xc):
                 xc = ks.xc
