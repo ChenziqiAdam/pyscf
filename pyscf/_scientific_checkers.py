@@ -405,6 +405,318 @@ def check_analytic_vs_finite_difference_gradient(analytic, finite_diff):
     return diff <= tol
 
 
+# ---------------------------------------------------------------------------
+# Subsystem 14: fci/direct_spin1.py -- full configuration interaction
+# ---------------------------------------------------------------------------
+
+@_guard
+def check_fci_rdm1_trace(dm1a, dm1b, neleca, nelecb, norb):
+    """PS-FCI-001: FCI spin-separated RDM traces equal neleca/nelecb.
+
+    make_rdm1s's compiled string-excitation contraction kernel never
+    references the caller-supplied nelec integers when building matrix
+    elements -- an independently implemented path from the values it must
+    agree with (the PySCF fork's PS-SCF-002/PS-UHF-002/PS-MP2-003/PS-CC-002
+    electron-count/RDM-trace family, now at the FCI tier).
+    """
+    tr_a = np.trace(np.asarray(dm1a))
+    tr_b = np.trace(np.asarray(dm1b))
+    tol = 50.0 * eps64 * norb
+    trigger_if(abs(tr_a - neleca) > tol, "PS-FCI-001",
+               family="alpha", diff=abs(tr_a - neleca), tol=tol)
+    trigger_if(abs(tr_b - nelecb) > tol, "PS-FCI-001",
+               family="beta", diff=abs(tr_b - nelecb), tol=tol)
+
+
+@_guard
+def check_fci_energy_eigenvalue_consistency(h1e, eri, fcivec, norb, nelec, ecore, e_reported):
+    """PS-FCI-002: energy() recontraction matches kernel()'s reported eigenvalue.
+
+    kernel()'s Davidson/direct-diagonalization branches obtain e from the
+    iteration's own Ritz-value/LAPACK bookkeeping and never call energy() to
+    compute the number they report; energy() independently reconstructs the
+    2e contraction and recontracts against the returned fcivec via a
+    structurally different arithmetic path.
+    """
+    from pyscf.fci import direct_spin1
+    e_recontracted = direct_spin1.energy(h1e, eri, fcivec, norb, nelec) + ecore
+    diff = abs(e_recontracted - e_reported)
+    tol = 1e-8
+    trigger_if(diff > tol, "PS-FCI-002", diff=diff, tol=tol)
+
+
+# ---------------------------------------------------------------------------
+# Subsystem 15: ci/cisd.py -- configuration interaction singles and doubles
+# ---------------------------------------------------------------------------
+
+@_guard
+def check_cisd_rdm1_trace(dm1, nelectron, nmo):
+    """PS-CISD-001: CISD one-particle density matrix trace == nelectron.
+
+    _gamma1_intermediates builds doo/dov/dvo/dvv from the variational,
+    c0-normalized amplitude triple (c0,c1,c2) -- structurally different
+    arithmetic from CCSD's non-variational t1/t2+l1/l2 combination
+    (PS-CC-002) and MP2's t2-only construction (PS-MP2-003), even though all
+    three feed the same downstream ccsd_rdm._make_rdm1 assembly function.
+    """
+    tr = np.trace(dm1)
+    diff = abs(tr - nelectron)
+    tol = 50.0 * eps64 * nmo
+    trigger_if(diff > tol, "PS-CISD-001", diff=diff, tol=tol)
+
+
+# ---------------------------------------------------------------------------
+# Subsystem 16: mcscf/casci.py, mcscf/addons.py -- CASCI/CASSCF
+# ---------------------------------------------------------------------------
+
+@_guard
+def check_casci_electron_count(casdm1, nelecas):
+    """PS-MCSCF-001: trace(casdm1) == sum(nelecas).
+
+    ncore/nelecas are set once at CASCI/CASSCF construction and never
+    algebraically re-derived from the active-space FCI solve; casdm1's
+    trace is produced entirely by the FCI solver's own RDM machinery
+    (PS-FCI-001's law, one layer up), which knows nothing about ncore.
+    """
+    ncas = np.asarray(casdm1).shape[0]
+    tr = np.trace(np.asarray(casdm1))
+    nelecas_sum = sum(nelecas) if not isinstance(nelecas, (int, np.integer)) else nelecas
+    diff = abs(tr - nelecas_sum)
+    tol = 50.0 * eps64 * ncas
+    trigger_if(diff > tol, "PS-MCSCF-001", diff=diff, tol=tol)
+
+
+@_guard
+def check_casscf_canonicalization_density_invariance(dm_before, dm_after, s, nao):
+    """PS-MCSCF-002: total (core+active) density matrix unchanged by canonicalize().
+
+    Unlike a single orbital rotation at fixed occupation (PS-SCF-005/
+    PS-LO-001), cas_natorb=True canonicalization is a simultaneous,
+    jointly-consistent pair of transformations: an active-space orbital
+    rotation (from diagonalizing casdm1) and a CI-vector transformation
+    that must use the identical rotation matrix to stay consistent.
+    """
+    diff = np.abs(dm_before - dm_after).max()
+    cond_s = np.linalg.cond(s)
+    tol = 50.0 * eps64 * nao * cond_s
+    trigger_if(diff > tol, "PS-MCSCF-002", diff=diff, tol=tol)
+
+
+@_guard
+def check_natural_orbital_occupation_conservation(noons, nelectron, s, scf_level):
+    """PS-MCSCF-003: sum(NOONs) == nelectron; each NOON in [0,2] for SCF-level refs.
+
+    A third, structurally distinct computational route to the electron
+    count beyond the AO-metric trace (PS-SCF-002) and grid-quadrature
+    (PS-DFT-001) routes -- a generalized eigendecomposition via LAPACK.
+    """
+    noons = np.asarray(noons)
+    cond_s = np.linalg.cond(s)
+    tol = 50.0 * eps64 * cond_s
+    diff = abs(noons.sum() - nelectron)
+    trigger_if(diff > tol, "PS-MCSCF-003", family="sum", diff=diff, tol=tol)
+    if scf_level:
+        bound_violation = max(-noons.min(), noons.max() - 2.0)
+        trigger_if(bound_violation > tol, "PS-MCSCF-003",
+                   family="bound", violation=bound_violation, tol=tol)
+
+
+# ---------------------------------------------------------------------------
+# Subsystem 17: ao2mo/incore.py -- AO-to-MO two-electron integral transform
+# ---------------------------------------------------------------------------
+
+@_guard
+def check_ao2mo_permutation_symmetry(eri, nmo, cond_s):
+    """PS-AO2MO-001: same-orbital-set MO-transformed ERI has 8-fold symmetry.
+
+    ao2mo.incore's compiled kernel performs two sequential half-transforms
+    (half_e1 then nr_e2), not a single symmetric operation -- one layer
+    upstream of the PS-MP2-002/PS-CC-001 amplitude-symmetry checks.
+    """
+    eri = np.asarray(eri).reshape(nmo, nmo, nmo, nmo)
+    d1 = np.abs(eri - eri.transpose(1, 0, 2, 3)).max()
+    d2 = np.abs(eri - eri.transpose(0, 1, 3, 2)).max()
+    d3 = np.abs(eri - eri.transpose(2, 3, 0, 1)).max()
+    diff = max(d1, d2, d3)
+    tol = 50.0 * eps64 * nmo ** 1.5 * cond_s
+    trigger_if(diff > tol, "PS-AO2MO-001", diff=diff, tol=tol)
+
+
+# ---------------------------------------------------------------------------
+# Subsystem 18: solvent/ddcosmo.py, solvent/pcm.py -- implicit solvation
+# ---------------------------------------------------------------------------
+
+@_guard
+def check_implicit_solvent_energy_sign(epcm, eps):
+    """PS-SOLV-001: epcm <= 0 for a physically realizable dielectric (eps>1).
+
+    epcm is not locally forced by the one-line f_epsilon*<psi,Xvec>
+    (ddCOSMO) or 0.5*dot(q_sym,v_grids) (PCM) expression -- both inner
+    products are the output of a separate linear solve over a discretized
+    dielectric-boundary operator (Lmat, or K/R). The induced reaction-field
+    polarization always opposes and partially cancels the solute's own
+    field for a passive/dissipative dielectric response.
+    """
+    if not (eps > 1) or eps == float('inf'):
+        return
+    tol = 50.0 * eps64 * max(abs(epcm), 1e-8)
+    trigger_if(epcm > tol, "PS-SOLV-001", epcm=epcm, tol=tol, eps=eps)
+
+
+# ---------------------------------------------------------------------------
+# Subsystem 19: pbc/gto/cell.py -- lattice geometry, Ewald summation
+# ---------------------------------------------------------------------------
+
+@_guard
+def check_pbc_reciprocal_lattice_duality(a, b, norm_to):
+    """PS-PBC-001: a_i . b_j == norm_to * delta_ij, re-derived independently.
+
+    reciprocal_vectors() computes b via a direct matrix inverse
+    (b = norm_to*inv(a.T)); this checker re-derives b from scratch via the
+    cross-product/triple-product formula the docstring states, a
+    structurally different numerical routine from the production code's
+    LAPACK matrix inverse.
+    """
+    a = np.asarray(a)
+    vol = np.dot(a[0], np.cross(a[1], a[2]))
+    if abs(vol) < 1e-300:
+        return
+    b_ref = np.empty((3, 3))
+    b_ref[0] = norm_to * np.cross(a[1], a[2]) / vol
+    b_ref[1] = norm_to * np.cross(a[2], a[0]) / vol
+    b_ref[2] = norm_to * np.cross(a[0], a[1]) / vol
+    diff = np.abs(np.asarray(b) - b_ref).max()
+    cond_a = np.linalg.cond(a)
+    tol = 50.0 * eps64 * cond_a
+    trigger_if(diff > tol, "PS-PBC-001", diff=diff, tol=tol)
+
+
+@_guard
+def check_pbc_ewald_algorithm_consistency(e_direct, e_pme):
+    """PS-PBC-003: direct-summation and particle-mesh Ewald energies agree.
+
+    Two structurally different reciprocal-space routines (a direct Gv-grid
+    sum vs. a B-spline/FFT convolution) computing the same lattice-sum
+    energy; agreement is bounded by PME's own interpolation/grid
+    discretization error, not machine precision.
+    """
+    diff = abs(e_direct - e_pme)
+    tol = 1e-6 * max(abs(e_direct), 1e-8)
+    trigger_if(diff > tol, "PS-PBC-003", diff=diff, tol=tol)
+
+
+# ---------------------------------------------------------------------------
+# Subsystem 20: pbc/scf/khf.py, pbc/scf/kuhf.py -- k-point SCF
+# ---------------------------------------------------------------------------
+
+@_guard
+def check_pbc_krhf_electron_count(mo_occ_kpts, nelectron_total):
+    """PS-PBC-004: sum over k-points of mo_occ equals cell.tot_electrons(nkpts).
+
+    get_occ() pools the spectrum across ALL sampled k-points via a single
+    sort, finds one shared Fermi level, then applies that threshold
+    INDEPENDENTLY to each k-point's own spectrum -- no line re-verifies
+    that summing mo_occ_kpts back up reproduces tot_electrons(nkpts).
+    """
+    total = sum(float(np.sum(mo_occ_kpts[k])) for k in range(len(mo_occ_kpts)))
+    trigger_if(total != nelectron_total, "PS-PBC-004",
+               total=total, nelectron_total=nelectron_total)
+
+
+@_guard
+def check_pbc_kuhf_electron_count(mo_occ_kpts, nocc_a, nocc_b):
+    """PS-PBC-005: per-spin k-summed occupation matches (nocc_a, nocc_b).
+
+    Exercises two composed risk surfaces neither PS-PBC-004 nor the
+    molecular PS-UHF-002 exercises alone: the pooled-spectrum-then-per-k
+    mechanism AND the alpha/beta bookkeeping split, together.
+    """
+    total_a = sum(float(np.sum(mo_occ_kpts[0][k])) for k in range(len(mo_occ_kpts[0])))
+    total_b = sum(float(np.sum(mo_occ_kpts[1][k])) for k in range(len(mo_occ_kpts[1])))
+    trigger_if(total_a != nocc_a, "PS-PBC-005",
+               family="alpha", total=total_a, nocc=nocc_a)
+    trigger_if(total_b != nocc_b, "PS-PBC-005",
+               family="beta", total=total_b, nocc=nocc_b)
+
+
+# ---------------------------------------------------------------------------
+# Subsystem 21: pbc/tools/pbc.py -- Madelung / exact-exchange divergence
+# ---------------------------------------------------------------------------
+
+@_guard
+def check_pbc_madelung_correction_sign(ewald_value):
+    """PS-PBC-006: ecell.ewald() <= 0 inside madelung(), before the -2x rescale.
+
+    The scan candidate's originally-proposed observation point (madelung()'s
+    own output) is NOT reliably negative -- the -2x convention factor flips
+    the sign of the actually-well-understood physical quantity. The
+    genuinely well-understood sign statement is about ecell.ewald() itself,
+    observed here before the sign-flipping rescale.
+    """
+    tol = 50.0 * eps64 * max(abs(ewald_value), 1e-8)
+    trigger_if(ewald_value > tol, "PS-PBC-006", ewald_value=ewald_value, tol=tol)
+
+
+# ---------------------------------------------------------------------------
+# Subsystem 22: pbc/mp/kmp2.py -- k-point MP2
+# ---------------------------------------------------------------------------
+
+@_guard
+def check_pbc_kmp2_energy_sign(emp2, e_hf, nkpts):
+    """PS-PBC-007: KMP2 correlation energy must be non-positive at a canonical KRHF ref.
+
+    kmp2.kernel() is fully independent code from molecular mp2.py -- its own
+    triple-k-point (ki,kj,ka->kb via kconserv) summation structure, its own
+    DF or exact-integral contraction path, and its own 1/nkpts energy
+    normalization, with no molecular-code analog.
+    """
+    tol = 50.0 * eps64 * abs(e_hf) * nkpts
+    trigger_if(emp2 > tol, "PS-PBC-007", emp2=emp2, tol=tol)
+
+
+# ---------------------------------------------------------------------------
+# Subsystem 23: pbc/cc/kccsd_rhf.py -- k-point RCCSD
+# ---------------------------------------------------------------------------
+
+@_guard
+def check_pbc_kccsd_t2_symmetry(t2, kconserv):
+    """PS-PBC-008: t2[ki,kj,ka][i,j,a,b] == t2[kj,ki,kb][j,i,b,a].
+
+    The k-point generalization of the molecular PS-MP2-002/PS-CC-001
+    permutation law; verifies the law SURVIVES at update_amps()'s own
+    return across the k-point DIIS vectorization -- a k-point-specific
+    reshape/indexing bug (flattening the three k-point dimensions into and
+    out of the DIIS vector) has no molecular-code analog.
+    """
+    nkpts = t2.shape[0]
+    worst = 0.0
+    for ki in range(nkpts):
+        for kj in range(nkpts):
+            for ka in range(nkpts):
+                kb = kconserv[ki, ka, kj]
+                lhs = t2[ki, kj, ka]
+                rhs = t2[kj, ki, kb].transpose(1, 0, 3, 2)
+                worst = max(worst, np.abs(lhs - rhs).max())
+    tol = 50.0 * eps64
+    trigger_if(worst > tol, "PS-PBC-008", diff=worst, tol=tol)
+
+
+@_guard
+def check_pbc_kccsd_time_reversal_reality(e_imag, time_reversal_symmetric):
+    """PS-PBC-009: |e.imag| negligible for a time-reversal-symmetric k-mesh.
+
+    energy()'s own logger.warn at abs(e.imag)>1e-4 already identifies
+    e.imag as diagnostically meaningful but never records the passing case
+    for audit purposes. The imaginary part is a GLOBAL, mesh-level
+    cancellation property (pairing k and -k contributions across the entire
+    triple loop), not locally guaranteed by any single line.
+    """
+    if not time_reversal_symmetric:
+        return
+    tol = 1e-6
+    trigger_if(abs(e_imag) > tol, "PS-PBC-009", e_imag=e_imag, tol=tol)
+
+
 def run_finite_difference_check(mf_class, mol, atom_idx, component, h_ang=1e-4):
     """Opt-in helper: run the O(natm)-cost PS-GRAD-001 check for one coordinate.
 

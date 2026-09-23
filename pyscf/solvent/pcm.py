@@ -395,6 +395,13 @@ class PCM(lib.StreamObject):
         vmat = self._get_vmat(q_sym)
         epcm = 0.5 * numpy.dot(q_sym[0], v_grids[0])
 
+        try:
+            from pyscf import _scientific_checkers as _sc
+            if _sc.enabled():
+                _sc.check_implicit_solvent_energy_sign(float(epcm), float(self.eps))
+        except Exception:
+            pass
+
         self._intermediates['q'] = q[0]
         self._intermediates['q_sym'] = q_sym[0]
         self._intermediates['v_grids'] = v_grids[0]

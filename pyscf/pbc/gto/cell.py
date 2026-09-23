@@ -690,6 +690,18 @@ def get_ewald_params(cell, precision=None, mesh=None):
         ew_cut = _estimate_rcut(ew_eta**2, 0, 1., precision)
     return ew_eta, ew_cut
 
+def _ewald_direct_sum(cell, ew_eta=None, ew_cut=None):
+    '''PS-PBC-003 checker helper: the direct-summation Ewald energy for the
+    same cell, bypassing the particle_mesh_ewald() dispatch in ewald()
+    regardless of cell.use_particle_mesh_ewald. Never called except from the
+    PS-PBC-003 sanitizer hook in ewald() itself, which is inert unless
+    SCIBENCH_TRIGGER_LOG is set.
+    '''
+    cell2 = cell.copy(deep=False)
+    cell2.use_particle_mesh_ewald = False
+    return ewald(cell2, ew_eta, ew_cut)
+
+
 def ewald(cell, ew_eta=None, ew_cut=None):
     '''Perform real (R) and reciprocal (G) space Ewald sum for the energy.
 
@@ -712,7 +724,15 @@ def ewald(cell, ew_eta=None, ew_cut=None):
 
     if cell.dimension == 3 and cell.use_particle_mesh_ewald:
         from pyscf.pbc.gto import ewald_methods
-        return ewald_methods.particle_mesh_ewald(cell, ew_eta, ew_cut)
+        e_pme = ewald_methods.particle_mesh_ewald(cell, ew_eta, ew_cut)
+        try:
+            from pyscf import _scientific_checkers as _sc
+            if _sc.enabled():
+                e_direct = _ewald_direct_sum(cell, ew_eta, ew_cut)
+                _sc.check_pbc_ewald_algorithm_consistency(e_direct, e_pme)
+        except Exception:
+            pass
+        return e_pme
 
     chargs = cell.atom_charges()
 
@@ -1768,7 +1788,16 @@ class Cell(mole.MoleBase):
             assert (abs(np.dot(a[0], a[2])) < 1e-9 and
                    abs(np.dot(a[1], a[2])) < 1e-9)
         b = np.linalg.inv(a.T)
-        return norm_to * b
+        b = norm_to * b
+
+        try:
+            from pyscf import _scientific_checkers as _sc
+            if _sc.enabled() and self.dimension == 3:
+                _sc.check_pbc_reciprocal_lattice_duality(a, b, norm_to)
+        except Exception:
+            pass
+
+        return b
 
     def get_abs_kpts(self, scaled_kpts):
         '''Get absolute k-points (in 1/Bohr), given "scaled" k-points in

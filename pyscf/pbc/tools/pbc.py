@@ -505,7 +505,14 @@ def madelung(cell, kpts, omega=None):
         omega = cell.omega
 
     if omega == 0:
-        return -2*ecell.ewald()
+        _ewald_val = ecell.ewald()
+        try:
+            from pyscf import _scientific_checkers as _sc
+            if _sc.enabled():
+                _sc.check_pbc_madelung_correction_sign(float(_ewald_val))
+        except Exception:
+            pass
+        return -2*_ewald_val
 
     else:
         # cell.ewald function does not use the Coulomb kernel function

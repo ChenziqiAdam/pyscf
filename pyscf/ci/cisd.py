@@ -576,7 +576,14 @@ def make_rdm1(myci, civec=None, nmo=None, nocc=None, ao_repr=False):
     if nmo is None: nmo = myci.nmo
     if nocc is None: nocc = myci.nocc
     d1 = _gamma1_intermediates(myci, civec, nmo, nocc)
-    return ccsd_rdm._make_rdm1(myci, d1, with_frozen=True, ao_repr=ao_repr)
+    dm1 = ccsd_rdm._make_rdm1(myci, d1, with_frozen=True, ao_repr=ao_repr)
+    try:
+        from pyscf import _scientific_checkers as _sc
+        if _sc.enabled() and not ao_repr:
+            _sc.check_cisd_rdm1_trace(dm1, myci.mol.nelectron, nmo)
+    except Exception:
+        pass
+    return dm1
 
 def make_rdm2(myci, civec=None, nmo=None, nocc=None, ao_repr=False):
     r'''

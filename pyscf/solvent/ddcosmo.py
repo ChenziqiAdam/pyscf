@@ -810,6 +810,13 @@ class ddCOSMO(lib.StreamObject):
         epcm = .5 * f_epsilon * numpy.einsum('jx,jx', psi, Xvec)
         vpcm = .5 * f_epsilon * vmat
 
+        try:
+            from pyscf import _scientific_checkers as _sc
+            if _sc.enabled():
+                _sc.check_implicit_solvent_energy_sign(float(epcm), float(dielectric))
+        except Exception:
+            pass
+
         return epcm, vpcm
 
     def _B_dot_x(self, dm):

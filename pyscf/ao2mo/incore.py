@@ -143,6 +143,23 @@ def general(eri_ao, mo_coeffs, verbose=0, compact=True, **kwargs):
 
 # transform e2
     eri1 = _ao2mo.nr_e2(eri1, mokl, klshape, aosym='s4', mosym=klmosym)
+
+    try:
+        from pyscf import _scientific_checkers as _sc
+        if (_sc.enabled() and not compact
+                and mo_coeffs[0] is mo_coeffs[1] is mo_coeffs[2] is mo_coeffs[3]
+                and all(c.dtype != numpy.complex128 for c in mo_coeffs)):
+            nmo = mo_coeffs[0].shape[1]
+            # No AO overlap is available inside this function; the MO
+            # coefficient matrix's own conditioning is the natural in-scope
+            # proxy for the AO basis conditioning that actually drives the
+            # tolerance (a poorly-conditioned AO basis produces poorly-
+            # conditioned MO coefficients derived from it).
+            cond_c = numpy.linalg.cond(mo_coeffs[0])
+            _sc.check_ao2mo_permutation_symmetry(eri1, nmo, cond_c)
+    except Exception:
+        pass
+
     return eri1
 
 def half_e1(eri_ao, mo_coeffs, compact=True):

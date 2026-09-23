@@ -150,6 +150,20 @@ def kernel(mp, mo_energy, mo_coeff, verbose=logger.NOTE, with_t2=WITH_T2):
     emp2_os /= nkpts
     emp2 = lib.tag_array(emp2_ss+emp2_os, e_corr_ss=emp2_ss, e_corr_os=emp2_os)
 
+    try:
+        from pyscf import _scientific_checkers as _sc
+        if _sc.enabled():
+            _frozen = getattr(mp, 'frozen', None)
+            _canonical = _frozen in (0, None) or (isinstance(_frozen, int) and _frozen == 0)
+            _gaps_ok = all(
+                (mo_e_v[k].min() - mo_e_o[k].max()) > 1e-8 for k in range(nkpts)
+            )
+            if _canonical and _gaps_ok:
+                _sc.check_pbc_kmp2_energy_sign(
+                    float(emp2.real), float(mp._scf.e_tot), nkpts)
+    except Exception:
+        pass
+
     return emp2, t2
 
 

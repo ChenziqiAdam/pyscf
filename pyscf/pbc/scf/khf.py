@@ -210,6 +210,16 @@ def get_occ(mf, mo_energy_kpts=None, mo_coeff_kpts=None):
                          np.sort(mo_energy_kpts[k][mo_occ_kpts[k]==0]))
         np.set_printoptions(threshold=1000)
 
+    try:
+        from pyscf import _scientific_checkers as _sc
+        _sigma = getattr(mf, 'sigma', None)
+        _smearing_active = bool(_sigma) and getattr(mf, 'smearing_method', None)
+        if _sc.enabled() and not _smearing_active:
+            _sc.check_pbc_krhf_electron_count(
+                mo_occ_kpts, mf.cell.tot_electrons(nkpts))
+    except Exception:
+        pass
+
     return mo_occ_kpts
 
 

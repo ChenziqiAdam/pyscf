@@ -47,6 +47,26 @@ einsum = lib.einsum
 kernel = pyscf.cc.ccsd.kernel
 
 
+def _is_time_reversal_symmetric_mesh(cc):
+    '''PS-PBC-009 checker helper: True iff cc's sampled k-mesh is closed
+    under k -> -k modulo a reciprocal lattice vector, checked directly on
+    the scaled k-points actually stored on the CC object rather than
+    inferred from how the mesh was constructed.
+    '''
+    try:
+        cell = cc._scf.cell
+        kpts = cc.kpts
+        scaled = cell.get_scaled_kpts(kpts)
+        scaled_fbz = kpts_helper.round_to_fbz(scaled)
+        neg_fbz = kpts_helper.round_to_fbz(-scaled)
+        for k in range(len(scaled)):
+            if kpts_helper.member(neg_fbz[k], scaled_fbz).size == 0:
+                return False
+        return True
+    except Exception:
+        return False
+
+
 def get_normt_diff(cc, t1, t2, t1new, t2new):
     '''Calculates norm(t1 - t1new) + norm(t2 - t2new).'''
     return np.linalg.norm(t1new - t1) + np.linalg.norm(t2new - t2)
@@ -230,6 +250,13 @@ def update_amps(cc, t1, t2, eris):
 
     time0 = log.timer_debug1('update t1 t2', *time0)
 
+    try:
+        from pyscf import _scientific_checkers as _sc
+        if _sc.enabled():
+            _sc.check_pbc_kccsd_t2_symmetry(t2new, kconserv)
+    except Exception:
+        pass
+
     return t1new, t2new
 
 
@@ -410,6 +437,15 @@ def energy(cc, t1, t2, eris):
     e /= nkpts
     if abs(e.imag) > 1e-4:
         logger.warn(cc, 'Non-zero imaginary part found in KRCCSD energy %s', e)
+
+    try:
+        from pyscf import _scientific_checkers as _sc
+        if _sc.enabled():
+            _sym = _is_time_reversal_symmetric_mesh(cc)
+            _sc.check_pbc_kccsd_time_reversal_reality(float(e.imag), _sym)
+    except Exception:
+        pass
+
     return e.real
 
 

@@ -355,6 +355,16 @@ def make_natural_orbitals (method_obj):
     noons = numpy.flip(w)
     natorbs = numpy.flip(v, axis=1)
 
+    try:
+        from pyscf import _scientific_checkers as _sc
+        if _sc.enabled():
+            _scf_level = isinstance(
+                mf, (scf.hf.RHF, scf.rohf.ROHF, scf.uhf.UHF))
+            _sc.check_natural_orbital_occupation_conservation(
+                noons, mf.mol.nelectron, S, _scf_level)
+    except Exception:
+        pass
+
     return noons, natorbs
 
 

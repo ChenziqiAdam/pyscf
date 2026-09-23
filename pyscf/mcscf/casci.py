@@ -473,6 +473,22 @@ def canonicalize(mc, mo_coeff=None, ci=None, eris=None, sort=False,
 
     if mo_coeff is None: mo_coeff = mc.mo_coeff
     if ci is None: ci = mc.ci
+
+    _sc_precheck_ok = False
+    try:
+        from pyscf import _scientific_checkers as _sc
+        if (_sc.enabled() and not isinstance(ci, (list, tuple, RANGE_TYPE))
+                and not isinstance(mc, scf.uhf.UHF)):
+            _sc_precheck_ok = True
+            _ncore = mc.ncore
+            _s_pre = mc._scf.get_ovlp()
+            _dm_core_before = 2 * mo_coeff[:, :_ncore] @ mo_coeff[:, :_ncore].conj().T
+            _casdm1_before = mc.fcisolver.make_rdm1(ci, mc.ncas, mc.nelecas)
+            _mocas_before = mo_coeff[:, _ncore:_ncore+mc.ncas]
+            _dm_before = _dm_core_before + _mocas_before @ _casdm1_before @ _mocas_before.conj().T
+    except Exception:
+        _sc_precheck_ok = False
+
     if casdm1 is None:
         if (isinstance(ci, (list, tuple, RANGE_TYPE)) and
                 not isinstance(mc.fcisolver, addons.StateAverageFCISolver)):
@@ -558,6 +574,17 @@ def canonicalize(mc, mo_coeff=None, ci=None, eris=None, sort=False,
             log.debug('i = %d  <i|F|i> = %12.8f', i+1, mo_energy[i])
 # still return ci coefficients, in case the canonicalization function changed
 # cas orbitals, the ci coefficients should also be updated.
+    if _sc_precheck_ok:
+        try:
+            if not isinstance(ci, (list, tuple, RANGE_TYPE)):
+                _casdm1_after = mc.fcisolver.make_rdm1(ci, mc.ncas, mc.nelecas)
+                _mocas_after = mo_coeff1[:, _ncore:_ncore+mc.ncas]
+                _dm_core_after = 2 * mo_coeff1[:, :_ncore] @ mo_coeff1[:, :_ncore].conj().T
+                _dm_after = _dm_core_after + _mocas_after @ _casdm1_after @ _mocas_after.conj().T
+                _sc.check_casscf_canonicalization_density_invariance(
+                    _dm_before, _dm_after, _s_pre, mo_coeff.shape[0])
+        except Exception:
+            pass
     return mo_coeff1, ci, mo_energy
 
 
@@ -614,6 +641,15 @@ def kernel(casci, mo_coeff=None, ci0=None, verbose=logger.NOTE, envs=None):
 
     t1 = log.timer('FCI solver', *t1)
     e_cas = e_tot - energy_core
+
+    try:
+        from pyscf import _scientific_checkers as _sc
+        if _sc.enabled() and not isinstance(fcivec, (list, tuple)):
+            casdm1 = casci.fcisolver.make_rdm1(fcivec, ncas, nelecas)
+            _sc.check_casci_electron_count(casdm1, nelecas)
+    except Exception:
+        pass
+
     return e_tot, e_cas, fcivec
 
 
