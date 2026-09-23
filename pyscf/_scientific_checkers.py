@@ -713,7 +713,7 @@ def check_pbc_kuhf_electron_count(mo_occ_kpts, nocc_a, nocc_b):
 # ---------------------------------------------------------------------------
 
 @_guard
-def check_pbc_madelung_correction_sign(ewald_value):
+def check_pbc_madelung_correction_sign(ewald_value, aspect_ratio=None):
     """PS-PBC-006: ecell.ewald() <= 0 inside madelung(), before the -2x rescale.
 
     The scan candidate's originally-proposed observation point (madelung()'s
@@ -727,9 +727,43 @@ def check_pbc_madelung_correction_sign(ewald_value):
     ecell.ewald() was robustly negative in every trial (-0.0956 to -0.2502).
     Tolerance is relative to the observed self-energy's own scale, matching
     the original derivation's methodology and range closely.
+
+    PRECONDITION FIX (root-cause pass, 2026-09-23, after a round-1
+    triggerability firing on a hand-built vacuum-padded quasi-1D H2-chain
+    cell -- 2 H atoms, 1.4A periodic axis, 12A vacuum in the other two
+    directions, KRHF/KMP2 (2,1,1) k-mesh): direct numerical investigation
+    (aspect-ratio and eta/precision sweeps against the built, unmodified
+    checkout) showed ecell.ewald() is NOT an unconditional 3D sign theorem.
+    It is eta-/precision-independent (bit-identical across an 8-decade
+    precision sweep and a 2-order-of-magnitude manual eta override, ruling
+    out under-convergence) but crosses from negative to positive at a
+    sharp, scale-invariant threshold in the *aspect ratio* of ecell's own
+    (Nk-scaled) lattice-vector lengths: max(|a_i|)/min(|a_i|) ~= 4.164,
+    reproduced identically (to 4 significant figures) across 5 independent
+    periodic-length values (0.7-3.0 A) and confirmed on non-orthogonal
+    triclinic cells too (compact triclinic, ratio 1.14: negative;
+    elongated triclinic, ratio 14.3: positive). This matches a known,
+    PySCF-collaborator-acknowledged limitation of approximating a
+    genuinely 1D/2D-periodic system via 3D vacuum padding (GitHub issue
+    pyscf/pyscf#2224: divergent/anomalous Coulomb-type PBC quantities for
+    exactly this "large-vacuum, small-period-axis" 3D-cell construction,
+    attributed by a maintainer to the neutralizing-background/G=0
+    treatment) -- not a hidden numerical defect in ecell.ewald() itself.
+    The diamond cell used everywhere else in the round-1 sweep has aspect
+    ratio 2.0 (comfortably under the threshold), explaining why the sign
+    law held for every other PBC case in that sweep. Gated on
+    aspect_ratio <= 3.0 (>1.3x margin below the empirical ~4.164 crossing;
+    ecell.ewald() is still -0.087, far from zero, at ratio 3.0) --
+    excludes vacuum-padded quasi-low-dimensional 3D cells while covering
+    ordinary, reasonably-shaped 3D crystals (aspect_ratio=None, from a
+    caller that cannot cheaply compute it, is treated as in-scope to avoid
+    silently widening the gate).
     """
+    if aspect_ratio is not None and aspect_ratio > 3.0:
+        return
     tol = 50.0 * eps64 * max(abs(ewald_value), 1e-8)
-    trigger_if(ewald_value > tol, "PS-PBC-006", ewald_value=ewald_value, tol=tol)
+    trigger_if(ewald_value > tol, "PS-PBC-006", ewald_value=ewald_value, tol=tol,
+               aspect_ratio=aspect_ratio)
 
 
 # ---------------------------------------------------------------------------

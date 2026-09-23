@@ -509,7 +509,17 @@ def madelung(cell, kpts, omega=None):
         try:
             from pyscf import _scientific_checkers as _sc
             if _sc.enabled():
-                _sc.check_pbc_madelung_correction_sign(float(_ewald_val))
+                # PS-PBC-006 precondition: the ecell.ewald() <= 0 sign law
+                # only holds for a reasonably-shaped 3D cell. A vacuum-padded
+                # quasi-1D/2D construction (small periodic-axis length next
+                # to a much larger vacuum extent) can violate it -- see the
+                # checker's own docstring for the root-cause investigation.
+                # Scope it on ecell's own (Nk-scaled) lattice-vector-length
+                # aspect ratio, computed cheaply from data already in hand.
+                _lens = np.linalg.norm(a, axis=1)
+                _aspect_ratio = float(_lens.max() / _lens.min())
+                _sc.check_pbc_madelung_correction_sign(
+                    float(_ewald_val), aspect_ratio=_aspect_ratio)
         except Exception:
             pass
         return -2*_ewald_val
