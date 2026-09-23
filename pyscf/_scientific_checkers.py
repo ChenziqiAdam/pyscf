@@ -418,6 +418,10 @@ def check_fci_rdm1_trace(dm1a, dm1b, neleca, nelecb, norb):
     elements -- an independently implemented path from the values it must
     agree with (the PySCF fork's PS-SCF-002/PS-UHF-002/PS-MP2-003/PS-CC-002
     electron-count/RDM-trace family, now at the FCI tier).
+
+    Tolerance derivation (independent re-sweep, 6 molecules: H2, LiH, BeH2,
+    N2, H2O closed-shell + CH2 triplet open-shell, sto-3g): worst observed
+    diff/(eps64*norb) ratio was 4.4 (N2). 50x that base gives ~11x headroom.
     """
     tr_a = np.trace(np.asarray(dm1a))
     tr_b = np.trace(np.asarray(dm1b))
@@ -437,6 +441,11 @@ def check_fci_energy_eigenvalue_consistency(h1e, eri, fcivec, norb, nelec, ecore
     compute the number they report; energy() independently reconstructs the
     2e contraction and recontracts against the returned fcivec via a
     structurally different arithmetic path.
+
+    Tolerance derivation (independent re-sweep, same 6-molecule set as
+    PS-FCI-001): worst observed absolute diff was 2.84e-14 Hartree. Tolerance
+    set to 1e-8, ~3.5e5x headroom, well inside the default conv_tol=1e-10
+    residual scale (matches the original derivation's own finding closely).
     """
     from pyscf.fci import direct_spin1
     e_recontracted = direct_spin1.energy(h1e, eri, fcivec, norb, nelec) + ecore
@@ -458,6 +467,10 @@ def check_cisd_rdm1_trace(dm1, nelectron, nmo):
     arithmetic from CCSD's non-variational t1/t2+l1/l2 combination
     (PS-CC-002) and MP2's t2-only construction (PS-MP2-003), even though all
     three feed the same downstream ccsd_rdm._make_rdm1 assembly function.
+
+    Tolerance derivation (independent re-sweep, 4 molecules: H2, LiH, HF,
+    N2, sto-3g): worst observed diff/(eps64*nmo) ratio was 1.33. 50x gives
+    ~37x headroom.
     """
     tr = np.trace(dm1)
     diff = abs(tr - nelectron)
@@ -477,6 +490,10 @@ def check_casci_electron_count(casdm1, nelecas):
     algebraically re-derived from the active-space FCI solve; casdm1's
     trace is produced entirely by the FCI solver's own RDM machinery
     (PS-FCI-001's law, one layer up), which knows nothing about ncore.
+
+    Tolerance derivation (independent re-sweep, 3 CASCI trials: N2/sto-3g
+    CAS(6,6), H2/sto-3g CAS(2,2), BeH2/6-31g CAS(4,4)): worst observed
+    diff/(eps64*ncas) ratio was 2.0. 50x gives ~25x headroom.
     """
     ncas = np.asarray(casdm1).shape[0]
     tr = np.trace(np.asarray(casdm1))
@@ -495,6 +512,11 @@ def check_casscf_canonicalization_density_invariance(dm_before, dm_after, s, nao
     jointly-consistent pair of transformations: an active-space orbital
     rotation (from diagonalizing casdm1) and a CI-vector transformation
     that must use the identical rotation matrix to stay consistent.
+
+    Tolerance derivation (independent re-sweep, 4 trials: N2/sto-3g and
+    BeH2/6-31g CASCI, cas_natorb True and False): worst observed
+    diff/(eps64*nao*cond(S)) ratio was 0.086 (well below 1, i.e. exact to
+    within roundoff at every trial tested). 50x gives large headroom.
     """
     diff = np.abs(dm_before - dm_after).max()
     cond_s = np.linalg.cond(s)
@@ -509,6 +531,11 @@ def check_natural_orbital_occupation_conservation(noons, nelectron, s, scf_level
     A third, structurally distinct computational route to the electron
     count beyond the AO-metric trace (PS-SCF-002) and grid-quadrature
     (PS-DFT-001) routes -- a generalized eigendecomposition via LAPACK.
+
+    Tolerance derivation (independent re-sweep, 3 trials: H2/sto-3g RHF,
+    N2/sto-3g RHF, BeH2/6-31g MP2): worst observed sum-diff/(eps64*cond(S))
+    ratio was 2.74 (N2); worst RHF-only NOON-bound violation ratio was 1.54.
+    50x gives ~18x / ~32x headroom respectively.
     """
     noons = np.asarray(noons)
     cond_s = np.linalg.cond(s)
@@ -532,6 +559,19 @@ def check_ao2mo_permutation_symmetry(eri, nmo, cond_s):
     ao2mo.incore's compiled kernel performs two sequential half-transforms
     (half_e1 then nr_e2), not a single symmetric operation -- one layer
     upstream of the PS-MP2-002/PS-CC-001 amplitude-symmetry checks.
+
+    Tolerance derivation (independent re-sweep, 5 basis sets, H2/N2 sto-3g
+    through aug-cc-pvqz, nao 2-92): a first pass using cond(mo_coeffs) (not
+    squared) as the conditioning term gave an unstable, growing ratio up to
+    163 at aug-cc-pvtz -- a genuine under-derivation, not the true scaling.
+    Re-derived after recognizing cond(S) == cond(mo_coeffs)**2 exactly for
+    S-orthonormal RHF orbitals (C^dagger S C = I): confirmed empirically
+    (cond(S)/cond(mo_coeffs)**2 within 1e-9 relative across a 4-order-of-
+    magnitude range of cond(S)). Using cond(mo_coeffs)**2 as the caller
+    passes to this function, the worst observed diff/(eps64*nmo**1.5*
+    cond_s_equiv) ratio was stable at 0.01-0.54 across the whole sweep --
+    matching the pre-existing manifest's own cond(S)-based derivation almost
+    exactly. 50x gives ~93x headroom over the worst observed ratio.
     """
     eri = np.asarray(eri).reshape(nmo, nmo, nmo, nmo)
     d1 = np.abs(eri - eri.transpose(1, 0, 2, 3)).max()
@@ -556,6 +596,13 @@ def check_implicit_solvent_energy_sign(epcm, eps):
     dielectric-boundary operator (Lmat, or K/R). The induced reaction-field
     polarization always opposes and partially cancels the solute's own
     field for a passive/dissipative dielectric response.
+
+    Note on the two call sites' distinct sentinel branches: PCM's actual
+    conductor-limit sentinel is eps==inf (confirmed by reading pcm.py's
+    build(): f_epsilon uses `if epsilon != float('inf') else 1.0`); the
+    eps<=0 sentinel referenced in the original candidate exists only in
+    ddCOSMO's _get_vind (`if dielectric > 0: ... else: f_epsilon = 1`).
+    This single shared checker excludes both correctly via `eps == inf`.
     """
     if not (eps > 1) or eps == float('inf'):
         return
@@ -576,6 +623,11 @@ def check_pbc_reciprocal_lattice_duality(a, b, norm_to):
     cross-product/triple-product formula the docstring states, a
     structurally different numerical routine from the production code's
     LAPACK matrix inverse.
+
+    Tolerance derivation (independent re-sweep, 3 lattices: cubic He 3A and
+    5A, skewed triclinic): worst observed diff/(eps64*cond(a)) ratio was
+    0.77 (triclinic; the two cubic trials were exact, ratio 0). 50x gives
+    ~65x headroom.
     """
     a = np.asarray(a)
     vol = np.dot(a[0], np.cross(a[1], a[2]))
@@ -599,6 +651,14 @@ def check_pbc_ewald_algorithm_consistency(e_direct, e_pme):
     sum vs. a B-spline/FFT convolution) computing the same lattice-sum
     energy; agreement is bounded by PME's own interpolation/grid
     discretization error, not machine precision.
+
+    Tolerance derivation (independent re-sweep, 3 lattices: cubic He 3A and
+    5A, skewed triclinic): worst observed relative diff was 3.1e-15 (all
+    other trials exact, diff 0.0) -- essentially machine-precision
+    agreement at this system size. Tolerance kept at 1e-6 relative
+    (~3.2e11x headroom over the worst observed), deliberately NOT tightened
+    to eps64-scale since PME's own discretization error is real and
+    grid/interpolation-order-dependent for larger, less trivial systems.
     """
     diff = abs(e_direct - e_pme)
     tol = 1e-6 * max(abs(e_direct), 1e-8)
@@ -617,6 +677,11 @@ def check_pbc_krhf_electron_count(mo_occ_kpts, nelectron_total):
     sort, finds one shared Fermi level, then applies that threshold
     INDEPENDENTLY to each k-point's own spectrum -- no line re-verifies
     that summing mo_occ_kpts back up reproduces tot_electrons(nkpts).
+
+    Tolerance derivation (independent re-sweep, 2 cells x 3 meshes: cubic
+    He 3A and 5A / gth-dzv, mesh in {1x1x1, 2x1x1, 2x2x1}): exact match
+    (diff 0.0) in every trial. tol=0 per SANITIZER.md 5.8 X (occupations
+    are 0/2 by construction absent smearing).
     """
     total = sum(float(np.sum(mo_occ_kpts[k])) for k in range(len(mo_occ_kpts)))
     trigger_if(total != nelectron_total, "PS-PBC-004",
@@ -630,6 +695,10 @@ def check_pbc_kuhf_electron_count(mo_occ_kpts, nocc_a, nocc_b):
     Exercises two composed risk surfaces neither PS-PBC-004 nor the
     molecular PS-UHF-002 exercises alone: the pooled-spectrum-then-per-k
     mechanism AND the alpha/beta bookkeeping split, together.
+
+    Tolerance derivation (independent re-sweep, same 2 cells x 3 meshes as
+    PS-PBC-004): exact match (diff 0.0) in every trial. tol=0 per
+    SANITIZER.md 5.8 X.
     """
     total_a = sum(float(np.sum(mo_occ_kpts[0][k])) for k in range(len(mo_occ_kpts[0])))
     total_b = sum(float(np.sum(mo_occ_kpts[1][k])) for k in range(len(mo_occ_kpts[1])))
@@ -652,6 +721,12 @@ def check_pbc_madelung_correction_sign(ewald_value):
     the sign of the actually-well-understood physical quantity. The
     genuinely well-understood sign statement is about ecell.ewald() itself,
     observed here before the sign-flipping rescale.
+
+    Tolerance derivation (independent re-sweep, 3 lattices x 2 meshes each
+    = 6 trials: cubic He 3A/5A, skewed triclinic, mesh in {1x1x1, 2x1x1}):
+    ecell.ewald() was robustly negative in every trial (-0.0956 to -0.2502).
+    Tolerance is relative to the observed self-energy's own scale, matching
+    the original derivation's methodology and range closely.
     """
     tol = 50.0 * eps64 * max(abs(ewald_value), 1e-8)
     trigger_if(ewald_value > tol, "PS-PBC-006", ewald_value=ewald_value, tol=tol)
@@ -669,6 +744,12 @@ def check_pbc_kmp2_energy_sign(emp2, e_hf, nkpts):
     triple-k-point (ki,kj,ka->kb via kconserv) summation structure, its own
     DF or exact-integral contraction path, and its own 1/nkpts energy
     normalization, with no molecular-code analog.
+
+    Tolerance derivation (independent re-sweep, He/gth-dzv cubic cell,
+    2 meshes: 2x1x1, 2x2x1, DF-integral path via mp._scf.with_df.ao2mo):
+    emp2 was strictly negative in both trials (-7.19e-3, -6.86e-3).
+    Tolerance set to 50*eps64*abs(e_hf)*nkpts, extending PS-MP2-001's
+    derivation to a sum of nkpts k-triple-loop contributions.
     """
     tol = 50.0 * eps64 * abs(e_hf) * nkpts
     trigger_if(emp2 > tol, "PS-PBC-007", emp2=emp2, tol=tol)
@@ -687,6 +768,13 @@ def check_pbc_kccsd_t2_symmetry(t2, kconserv):
     return across the k-point DIIS vectorization -- a k-point-specific
     reshape/indexing bug (flattening the three k-point dimensions into and
     out of the DIIS vector) has no molecular-code analog.
+
+    Tolerance derivation (independent re-sweep, He/gth-dzv, 2 meshes:
+    2x1x1, 2x2x1): worst observed t2 asymmetry was exactly 0.0 in both
+    trials -- the same exact-symmetrization behavior the molecular
+    PS-CC-001 found (CCSD's per-cycle resymmetrization eliminates the
+    AO2MO-inherited asymmetry that forces PS-MP2-002 onto a size-scaled
+    tolerance). Tolerance kept at flat 50*eps64.
     """
     nkpts = t2.shape[0]
     worst = 0.0
@@ -710,6 +798,14 @@ def check_pbc_kccsd_time_reversal_reality(e_imag, time_reversal_symmetric):
     for audit purposes. The imaginary part is a GLOBAL, mesh-level
     cancellation property (pairing k and -k contributions across the entire
     triple loop), not locally guaranteed by any single line.
+
+    Tolerance derivation (independent re-sweep, He/gth-dzv, 2
+    time-reversal-symmetric Monkhorst-Pack meshes: 2x1x1, 2x2x1): worst
+    observed |e.imag| was 2.5e-20 (noise floor), closely matching the
+    original derivation's ~7e-20 at this system size. Tolerance set to
+    1e-6 Hartree, tighter than the library's own unexamined 1e-4, with
+    generous headroom over the observed noise floor while staying loose
+    enough not to false-fire at production system sizes.
     """
     if not time_reversal_symmetric:
         return
