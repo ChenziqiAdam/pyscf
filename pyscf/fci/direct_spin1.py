@@ -312,7 +312,9 @@ def make_rdm1s(fcivec, norb, nelec, link_index=None):
         from pyscf import _scientific_checkers as _sc
         if _sc.enabled():
             _neleca, _nelecb = _unpack_nelec(nelec)
-            _sc.check_fci_rdm1_trace(rdm1a, rdm1b, _neleca, _nelecb, norb)
+            _fc = numpy.asarray(fcivec).ravel()
+            _sc.check_fci_rdm1_trace(rdm1a, rdm1b, _neleca, _nelecb, norb,
+                                     float(numpy.vdot(_fc, _fc).real))
     except Exception:
         pass
     return rdm1a, rdm1b
@@ -909,10 +911,10 @@ class FCIBase(lib.StreamObject):
                 if nroots > 1:
                     for _e, _c in zip(e, self.ci):
                         _sc.check_fci_energy_eigenvalue_consistency(
-                            h1e, eri, numpy.asarray(_c), norb, nelec, ecore, float(_e))
+                            h1e, eri, numpy.asarray(_c), norb, nelec, ecore, float(_e), self)
                 else:
                     _sc.check_fci_energy_eigenvalue_consistency(
-                        h1e, eri, numpy.asarray(self.ci), norb, nelec, ecore, float(e))
+                        h1e, eri, numpy.asarray(self.ci), norb, nelec, ecore, float(e), self)
         except Exception:
             pass
 

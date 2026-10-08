@@ -187,7 +187,8 @@ def make_rdm1(mp, t2=None, eris=None, ao_repr=False, with_frozen=True):
     try:
         from pyscf import _scientific_checkers as _sc
         if _sc.enabled() and with_frozen and not ao_repr:
-            _sc.check_mp2_rdm1_trace(numpy.asarray(dm1), mp.mol.nelectron, mp.nmo)
+            _sc.check_mp2_rdm1_trace(numpy.asarray(dm1), mp.mol.nelectron, mp.nmo,
+                                     getattr(mp, 'mo_occ', None))
     except Exception:
         pass
 

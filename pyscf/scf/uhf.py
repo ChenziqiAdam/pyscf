@@ -323,7 +323,11 @@ def get_occ(mf, mo_energy=None, mo_coeff=None):
 
     try:
         from pyscf import _scientific_checkers as _sc
-        if _sc.enabled():
+        # Fractional (float_occ_/smearing_) occupations and a user-assigned
+        # mf.nelec (!= the molecule's own) are outside the integer-count law.
+        if (_sc.enabled() and numpy.allclose(mo_occ[0], numpy.round(mo_occ[0]))
+                and numpy.allclose(mo_occ[1], numpy.round(mo_occ[1]))
+                and (mf.nelec is None or tuple(mf.nelec) == tuple(mf.mol.nelec))):
             _sc.check_uhf_electron_count_conservation(
                 int(mo_occ[0].sum()), int(mo_occ[1].sum()), mf.mol.nelectron, mf.mol.spin)
     except Exception:

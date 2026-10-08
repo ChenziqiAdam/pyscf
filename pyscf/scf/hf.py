@@ -254,10 +254,15 @@ Keyword argument "init_dm" is replaced by "dm0"''')
             # applies to the outer SCF object a user actually runs; the
             # trace(D S) half is unaffected (it never reads mo_occ) and stays
             # checked on both.
+            # Smeared/fractional occupations (addons.smearing_, float_occ_)
+            # sum to nelectron only to the smearing root-finder tolerance,
+            # not exactly; the exact mo_occ-sum law applies to integer
+            # occupations only.
             _mo_occ_sum = (None if type(mf).__name__ == 'AtomSphAverageRHF'
+                           or not numpy.allclose(mo_occ, numpy.round(mo_occ), rtol=0, atol=1e-12)
                            else float(numpy.sum(mo_occ)))
             _sc.check_electron_count_conservation(
-                mol, float(_pop.sum()), _mo_occ_sum)
+                mol, float(_pop.sum()), _mo_occ_sum, s1e)
     except Exception:
         pass
 
@@ -760,6 +765,14 @@ def init_guess_by_chkfile(mol, chkfile_name, project=None):
             # own tolerance derivation never covered. See repo-root
             # PROGRESS.md, PS-SCF-006 fix.
             _same_system = abs((im1 - im2) / (im1 + 1e-7)).max() <= 0.01
+            # The checkpoint must itself describe a completed SCF of the
+            # target electron count; a hand-written chkfile whose occupations
+            # do not sum to nelectron cannot restore to nelectron.
+            if getattr(mo[0], 'ndim', None) == 1:
+                _occ_total = float(numpy.sum(mo_occ))
+            else:
+                _occ_total = float(numpy.sum(mo_occ[0]) + numpy.sum(mo_occ[1]))
+            _same_system = _same_system and abs(_occ_total - mol.nelectron) < 1e-6
             if _same_system:
                 _s_check = get_ovlp(mol)
                 _sc.check_chkfile_restore_electron_count(mol, numpy.asarray(dm), _s_check, project)

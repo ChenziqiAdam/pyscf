@@ -519,7 +519,8 @@ def madelung(cell, kpts, omega=None):
                 _lens = np.linalg.norm(a, axis=1)
                 _aspect_ratio = float(_lens.max() / _lens.min())
                 _sc.check_pbc_madelung_correction_sign(
-                    float(_ewald_val), aspect_ratio=_aspect_ratio)
+                    float(_ewald_val), aspect_ratio=_aspect_ratio,
+                    dimension=cell.dimension)
         except Exception:
             pass
         return -2*_ewald_val
