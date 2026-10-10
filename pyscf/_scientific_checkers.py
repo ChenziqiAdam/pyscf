@@ -543,29 +543,29 @@ def check_ao_self_overlap_normalization(diag_s, mol=None):
 # Subsystem 8 & 12: dft/rks.py, dft/uks.py
 # ---------------------------------------------------------------------------
 
-def _grid_resolves_basis(mol, coords):
-    """True when the atom-centred grid resolves every primitive of the basis.
+def _grid_resolves_basis(mol, coords, weights=None, tol=1e-3):
+    """True when the integration grid resolves every basis function.
 
-    A Gaussian exp(-a r^2) is integrated to ~1e-3 or better by the default
-    atom grid for 3/rmax^2 <= a <= 1e4*max(Z-1,1) (rmax: largest grid distance from the
-    atom, Z: nuclear charge); outside it the quadrature error of a single
-    primitive is O(1e-3..1) by construction (sampled from single-atom sweeps
-    on He, C, Na, Fe). Standard basis sets lie inside this window.
+    Measured, not assumed: the grid quadrature of each AO self-overlap,
+    sum_g w_g ao_i(g)^2, must reproduce the analytic S_ii to a relative
+    ``tol``. A function the grid cannot integrate (very diffuse or very tight
+    primitives, high angular momentum) makes the quadrature electron count
+    wrong by construction. Standard basis sets on the default grid are well
+    inside (relative error <= 1e-4).
     """
-    if mol is None or coords is None:
+    if mol is None or coords is None or weights is None:
         return True
-    from pyscf import gto as _gto
     coords = np.asarray(coords)
-    for ia in range(mol.natm):
-        z = max(1, _gto.charge(mol.atom_symbol(ia)))
-        rmax2 = float(np.max(np.sum((coords - mol.atom_coord(ia)) ** 2, axis=1)))
-        for ib in range(mol.nbas):
-            if mol.bas_atom(ib) != ia:
-                continue
-            e = np.asarray(mol.bas_exp(ib), dtype=float)
-            if e.min() < 3.0 / rmax2 or e.max() > 1.0e4 * max(z - 1, 1):
-                return False
-    return True
+    weights = np.asarray(weights)
+    if coords.shape[0] != weights.shape[0]:
+        return True
+    s_diag = np.diag(mol.intor_symmetric('int1e_ovlp'))
+    acc = np.zeros(mol.nao)
+    step = 4000
+    for p0 in range(0, coords.shape[0], step):
+        ao = mol.eval_gto('GTOval', coords[p0:p0 + step])
+        acc += np.einsum('g,gi,gi->i', weights[p0:p0 + step], ao, ao)
+    return bool(np.all(np.abs(acc - s_diag) <= tol * s_diag))
 
 
 def grid_not_coarser_than_default(grids, mol):
@@ -604,13 +604,13 @@ def grid_not_coarser_than_default(grids, mol):
 
 
 @_guard
-def check_dft_grid_electron_count(n_grid, dm, s, mol=None, coords=None):
+def check_dft_grid_electron_count(n_grid, dm, s, mol=None, coords=None, weights=None):
     """PS-DFT-001: grid-quadrature electron count matches trace(D S).
 
-    Precondition: the grid resolves the primitive exponents of the basis
-    (quadrature of an unresolved Gaussian is wrong by construction).
+    Precondition: the grid resolves the basis (every AO self-overlap is
+    reproduced by the grid quadrature to 1e-3 relative).
     """
-    if not _grid_resolves_basis(mol, coords):
+    if not _grid_resolves_basis(mol, coords, weights):
         return
     tr = np.trace(dm @ s)
     diff = abs(n_grid - tr)
@@ -622,12 +622,12 @@ def check_dft_grid_electron_count(n_grid, dm, s, mol=None, coords=None):
 
 
 @_guard
-def check_uks_grid_electron_count(n_grid_tuple, dm, s, mol=None, coords=None):
+def check_uks_grid_electron_count(n_grid_tuple, dm, s, mol=None, coords=None, weights=None):
     """PS-UKS-001: per-spin-channel grid electron count matches trace(D_sigma S).
 
-    Precondition: as PS-DFT-001 (the grid resolves the basis primitives).
+    Precondition: as PS-DFT-001 (the grid resolves the basis).
     """
-    if not _grid_resolves_basis(mol, coords):
+    if not _grid_resolves_basis(mol, coords, weights):
         return
     n_a, n_b = n_grid_tuple[0], n_grid_tuple[1]
     tr_a = np.trace(dm[0] @ s)
@@ -991,7 +991,7 @@ def check_ao2mo_permutation_symmetry(eri, nmo, cond_s, cmax=None, eri_ao_max=Non
 # ---------------------------------------------------------------------------
 
 @_guard
-def check_implicit_solvent_energy_sign(epcm, eps, lmax=None):
+def check_implicit_solvent_energy_sign(epcm, eps, lmax=None, nleb=None):
     """PS-SOLV-001: epcm <= 0 for a physically realizable dielectric (eps>1).
 
     epcm is not locally forced by the one-line f_epsilon*<psi,Xvec>
@@ -1013,6 +1013,10 @@ def check_implicit_solvent_energy_sign(epcm, eps, lmax=None):
     # Precondition: a resolved ddCOSMO expansion. The truncated operator (small
     # lmax) is non-symmetric and its truncation error can flip the sign.
     if lmax is not None and lmax < 4:
+        return
+    # The angular quadrature must resolve the (lmax+1)^2 harmonic basis,
+    # otherwise the discretized operator is not negative-definite.
+    if nleb is not None and lmax is not None and nleb < (lmax + 1) ** 2:
         return
     # an energy that is zero by symmetry/neutrality is only defined to roundoff of the
     # underlying sums (~1e-14 Ha, up to ~1e-10 Ha for compact systems), so keep an
@@ -1050,8 +1054,8 @@ def check_pbc_reciprocal_lattice_duality(a, b, norm_to):
     b_ref[2] = norm_to * np.cross(a[0], a[1]) / vol
     diff = np.abs(np.asarray(b) - b_ref).max()
     cond_a = np.linalg.cond(a)
-    # b scales with norm_to; the base was derived at the default norm_to = 2*pi
-    tol = 50.0 * eps64 * cond_a * abs(norm_to) / (2.0 * np.pi)
+    # b = norm_to * a^-1 scales as 1/|a|: use the magnitude of b itself
+    tol = 50.0 * eps64 * cond_a * np.abs(b_ref).max()
     trigger_if(diff > tol, "PS-PBC-001", diff=diff, tol=tol)
 
 
