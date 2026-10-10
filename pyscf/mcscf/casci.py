@@ -582,7 +582,8 @@ def canonicalize(mc, mo_coeff=None, ci=None, eris=None, sort=False,
                 _dm_core_after = 2 * mo_coeff1[:, :_ncore] @ mo_coeff1[:, :_ncore].conj().T
                 _dm_after = _dm_core_after + _mocas_after @ _casdm1_after @ _mocas_after.conj().T
                 _sc.check_casscf_canonicalization_density_invariance(
-                    _dm_before, _dm_after, _s_pre, mo_coeff.shape[0])
+                    _dm_before, _dm_after, _s_pre, mo_coeff.shape[0],
+                    casdm1=_casdm1_before, cas_natorb=cas_natorb, mo_coeff=mo_coeff)
         except Exception:
             pass
     return mo_coeff1, ci, mo_energy
@@ -646,7 +647,7 @@ def kernel(casci, mo_coeff=None, ci0=None, verbose=logger.NOTE, envs=None):
         from pyscf import _scientific_checkers as _sc
         if _sc.enabled() and not isinstance(fcivec, (list, tuple)):
             casdm1 = casci.fcisolver.make_rdm1(fcivec, ncas, nelecas)
-            _sc.check_casci_electron_count(casdm1, nelecas)
+            _sc.check_casci_electron_count(casdm1, nelecas, ndet=getattr(fcivec, 'size', None))
     except Exception:
         pass
 

@@ -774,7 +774,9 @@ def init_guess_by_chkfile(mol, chkfile_name, project=None):
                 _occ_total = float(numpy.sum(mo_occ[0]) + numpy.sum(mo_occ[1]))
             _same_system = _same_system and abs(_occ_total - mol.nelectron) < 1e-6
             if _same_system:
-                _s_check = get_ovlp(mol)
+                # project=False reuses the stored orbitals, normalised in the
+                # checkpoint molecule's overlap; project=True renormalises in mol's
+                _s_check = get_ovlp(mol if project else chk_mol)
                 _sc.check_chkfile_restore_electron_count(mol, numpy.asarray(dm), _s_check, project)
     except Exception:
         pass
@@ -1427,7 +1429,8 @@ def canonicalize(mf, mo_coeff, mo_occ, fock=None):
             _dm_before = mf.make_rdm1(mo_coeff, mo_occ)
             _dm_after = mf.make_rdm1(mo, mo_occ)
             _sc.check_canonicalization_density_invariance(
-                numpy.asarray(_dm_before), numpy.asarray(_dm_after), _s, mo_coeff.shape[0])
+                numpy.asarray(_dm_before), numpy.asarray(_dm_after), _s, mo_coeff.shape[0],
+                mo_occ=mo_occ)
     except Exception:
         pass
 
@@ -1494,7 +1497,10 @@ def dip_moment(mol, dm, unit='Debye', origin=None, verbose=logger.NOTE, **kwargs
                                     verbose=logger.NOTE, _scibench_recall=True)
                 # mol_dip here is always in AU (the Debye rescale below has
                 # not happened yet at this point in the function).
-                _sc.check_dipole_origin_invariance(mol, mol_dip, _dip2, origin, _shift)
+                _dm_trace = float(numpy.einsum(
+                    'ij,ji', mol.intor_symmetric('int1e_ovlp'), dm).real)
+                _sc.check_dipole_origin_invariance(mol, mol_dip, _dip2, origin, _shift,
+                                                   dm_trace=_dm_trace)
         except Exception:
             pass
 

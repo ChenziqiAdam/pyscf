@@ -314,7 +314,7 @@ def make_rdm1s(fcivec, norb, nelec, link_index=None):
             _neleca, _nelecb = _unpack_nelec(nelec)
             _fc = numpy.asarray(fcivec).ravel()
             _sc.check_fci_rdm1_trace(rdm1a, rdm1b, _neleca, _nelecb, norb,
-                                     float(numpy.vdot(_fc, _fc).real))
+                                     float(numpy.vdot(_fc, _fc).real), ndet=_fc.size)
     except Exception:
         pass
     return rdm1a, rdm1b

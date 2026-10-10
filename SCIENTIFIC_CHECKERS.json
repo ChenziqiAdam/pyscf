@@ -28,12 +28,12 @@
       "symbol": "kernel (observation point)"
     },
     {
-      "alarm": "max(abs(dip1_au - dip2_au)) exceeds 50*eps64*shift*nelectron",
+      "alarm": "max(abs(dip1_au - dip2_au)) exceeds 50*eps64*shift*nelectron (2026-10-09: applied to the trace-corrected difference; n_ref = max(nelectron, |tr(DS)|))",
       "family": "dipole_origin_invariance",
       "id": "PS-SCF-003",
-      "invariant": "dip_moment(mol, dm, origin=o1) == dip_moment(mol, dm, origin=o2) for any o1 != o2",
+      "invariant": "dip_moment(mol, dm, origin=o1) == dip_moment(mol, dm, origin=o2) for any o1 != o2 (2026-10-09: for a density with tr(D S) != nelectron the exact shift (tr(D S)-nelectron)*(o2-o1) is subtracted before comparing; for an N-electron density this is the unchanged law)",
       "observation_point": "inside dip_moment(), a re-call sanitizer compares against a second call shifted by [0.37, 0, 0] (guarded against infinite recursion via a _scibench_recall kwarg)",
-      "precondition": "mol.charge == 0, any molecule/basis/density matrix",
+      "precondition": "mol.charge == 0, any molecule/basis/density matrix (an unnormalised density, e.g. the MINAO/VSAP guess with tr(DS)=1.975, is handled by the trace correction in the invariant)",
       "rationale": "users routinely translate geometries before/after a dipole calculation, trusting origin-independence for neutral systems; a violation would indicate the electronic/nuclear origin-dependent terms are inconsistently parametrized",
       "scientific_quantity": "electric dipole moment of a charge-neutral molecule",
       "source": "pyscf/scf/hf.py",
@@ -57,7 +57,7 @@
       "id": "PS-SCF-005",
       "invariant": "make_rdm1(canonicalize(mo_coeff,mo_occ)[1], mo_occ) == make_rdm1(mo_coeff, mo_occ)",
       "observation_point": "at canonicalize()'s return, computing make_rdm1 before and after",
-      "precondition": "any RHF mo_coeff/mo_occ pair, converged or not, any occupation pattern",
+      "precondition": "any RHF mo_coeff/mo_occ pair, converged or not, any occupation pattern AND (2026-10-09) occupations inside the open block (all values other than 0 and 2) are equal; hf.canonicalize diagonalises that block as a whole, which changes D when the occupations differ.",
       "rationale": "canonical orbitals are the standard starting point for MP2/CCSD/CASSCF specifically because they are trusted to represent the same physical state; a block-diagonalization bug that mixed an orbital across occupation classes would silently produce a different reference state",
       "scientific_quantity": "one-particle density matrix under a within-subspace orbital rotation",
       "source": "pyscf/scf/hf.py",
@@ -67,7 +67,7 @@
       "alarm": "abs(trace(dm s) - nelectron) exceeds 50*eps64*nao (project=False) or 50*eps64*nao*4 (project=True, looser per-orbital-renormalization error budget)",
       "family": "chkfile_projection_electron_count",
       "id": "PS-SCF-006",
-      "invariant": "trace(dm @ get_ovlp(mol)) == mol.nelectron",
+      "invariant": "trace(dm @ get_ovlp(mol)) == mol.nelectron (2026-10-09: S is the target mol's overlap for project=True and the checkpoint molecule's overlap for project=False, the metric in which the reused orbitals are normalised)",
       "observation_point": "at init_guess_by_chkfile()'s return, computing trace(dm @ s) for the target mol, gated on the same-system inertia-moment check",
       "precondition": "any call with a checkpoint from a completed SCF, restoring onto the SAME chemical system (checkpoint's and target mol's moments of inertia agree within 1% relative, the same signal init_guess_by_chkfile itself already computes and warns on for dissimilar geometries) -- basis and/or geometry may still differ; genuinely different molecules (different atoms/composition) are explicitly out of scope The checkpoint's own occupations must sum to the target nelectron.",
       "rationale": "an initial guess with the wrong electron count doesn't just converge slowly -- for the primary project=True different-molecule restart use case, it can start the SCF searching for the wrong physical state entirely",
@@ -88,7 +88,7 @@
       "symbol": "kernel"
     },
     {
-      "alarm": "max(abs(t2 - t2.transpose(1,0,3,2))) exceeds 50*eps64*nao**1.5",
+      "alarm": "max(abs(t2 - t2.transpose(1,0,3,2))) exceeds 50*eps64*nao**1.5 (2026-10-09: tolerance 50*eps64*nao**1.5*max(1,max|t2|))",
       "family": "mp2_t2_permutation_symmetry",
       "id": "PS-MP2-002",
       "invariant": "t2[i,j,a,b] == t2[j,i,b,a]",
@@ -100,7 +100,7 @@
       "symbol": "kernel"
     },
     {
-      "alarm": "abs(trace(dm1) - nelectron) exceeds 50*eps64*nmo",
+      "alarm": "abs(trace(dm1) - nelectron) exceeds 50*eps64*nmo (2026-10-09: tolerance 50*eps64*nmo*max(1,max|dm1|))",
       "family": "mp2_rdm1_trace_conservation",
       "id": "PS-MP2-003",
       "invariant": "trace(dm1) == mol.nelectron",
@@ -112,14 +112,14 @@
       "symbol": "make_rdm1"
     },
     {
-      "alarm": "max(abs(1 - largest_norm)) exceeds 50*eps64",
-      "family": "orbital_irrep_purity",
+      "alarm": "max over MOs of |sum_irrep projection - <mo|S|mo>| / <mo|S|mo> exceeds 1e-12",
+      "family": "symm_orb_completeness",
       "id": "PS-SYM-001",
-      "invariant": "largest_norm (max single-irrep projection) is close to 1 for every MO",
-      "observation_point": "inside label_orb_symm(), at the same point the library's own check=True block computes largest_norm, independent of whether that block's warn/raise path fires",
-      "precondition": "any symmetry-enabled calculation (mol.symmetry truthy), any point group/basis The orbitals are symmetry-adapted: label_orb_symm called with check=True and a deviation inside the function's own accepted band (100*tol).",
+      "invariant": "sum_irrep <mo|P_irrep|mo>_S == <mo|mo>_S for every MO (mol.symm_orb is a complete orthonormal symmetry-adapted basis of the AO space)",
+      "observation_point": "inside label_orb_symm(), on the per-irrep projected norms before they are normalised to unit sum",
+      "precondition": "any symmetry-enabled calculation (mol.symmetry truthy), any point group/basis, any orbitals (symmetry-pure or not, normalised or not, check True/False)",
       "rationale": "the library already computes and acts on this exact quantity but only via a warn/raise gate at ad hoc constants (1e-9, 1e2x); the common, unremarkable case (largest_norm >= 1-tol) is never separately recorded, so a regression that degrades purity without crossing the raise threshold would be invisible today",
-      "scientific_quantity": "overlap-weighted norm of a symmetry-adapted MO concentrated in a single irrep",
+      "scientific_quantity": "completeness of the symmetry-adapted basis: the irrep projections of an MO add up to its overlap norm",
       "source": "pyscf/symm/addons.py",
       "symbol": "label_orb_symm"
     },
@@ -136,7 +136,7 @@
       "symbol": "get_occ"
     },
     {
-      "alarm": "max(abs(diag(S) - 1)) exceeds 50*4*eps64 (tolerance 2000*eps64)",
+      "alarm": "max(abs(diag(S) - 1)) exceeds 50*4*eps64 (tolerance 2000*eps64) (2026-10-09: per-AO tolerance max(2000*eps64, 50*eps64*kappa), kappa = cancellation factor sum|w_i w_j s_ij|/|sum w_i w_j s_ij| of the AO's contraction; kappa=1 for ordinary bases)",
       "family": "ao_self_overlap_normalization",
       "id": "PS-GTO-001",
       "invariant": "diag(int1e_ovlp) is close to all-ones",
@@ -196,7 +196,7 @@
       "symbol": "CCSD.make_rdm1"
     },
     {
-      "alarm": "max(abs(rho_from_dm - rho_from_mo)) exceeds 50*eps64*nao*10",
+      "alarm": "max(abs(rho_from_dm - rho_from_mo)) exceeds 50*eps64*nao*10 (2026-10-09: tolerance 50*eps64*nao*10*max(1, max|rho|))",
       "family": "grid_density_representation_consistency",
       "id": "PS-NUMINT-001",
       "invariant": "eval_rho(mol, ao, dm) == eval_rho2(mol, ao, mo_coeff_occ, mo_occ_occ) on the same grid batch",
@@ -232,7 +232,7 @@
       "symbol": "run_finite_difference_check (opt-in helper)"
     },
     {
-      "alarm": "abs(trace(dm1a) - neleca) exceeds 50*eps64*norb or abs(trace(dm1b) - nelecb) exceeds 50*eps64*norb",
+      "alarm": "abs(trace(dm1a) - neleca) exceeds 50*eps64*norb or abs(trace(dm1b) - nelecb) exceeds 50*eps64*norb (2026-10-09: tolerance 50*eps64*norb + 4*eps64*ndet, ndet = number of determinants)",
       "family": "fci_rdm1_trace_conservation",
       "id": "PS-FCI-001",
       "invariant": "trace(dm1a) == neleca and trace(dm1b) == nelecb",
@@ -244,7 +244,7 @@
       "symbol": "make_rdm1s"
     },
     {
-      "alarm": "abs(energy(h1e, eri, fcivec, norb, nelec) + ecore - e) exceeds 1e-8 Hartree",
+      "alarm": "abs(energy(h1e, eri, fcivec, norb, nelec) + ecore - e) exceeds 1e-8 Hartree (2026-10-09: tolerance max(1e-8, 50*eps64*S), S = |e|+|e_recontracted|+|ecore|+N*max|h1e|+N^2*max|eri|)",
       "family": "fci_energy_eigenvalue_consistency",
       "id": "PS-FCI-002",
       "invariant": "energy(h1e, eri, fcivec, norb, nelec) + ecore == e, for each (e, fcivec) pair kernel() returns",
@@ -268,7 +268,7 @@
       "symbol": "make_rdm1"
     },
     {
-      "alarm": "abs(trace(casdm1) - sum(nelecas)) exceeds 50*eps64*ncas (tolerance max(50*eps64*ncas, 1e-9))",
+      "alarm": "abs(trace(casdm1) - sum(nelecas)) exceeds 50*eps64*ncas (tolerance max(50*eps64*ncas, 1e-9)) (2026-10-09: tolerance max(50*eps64*ncas, 1e-9, 8*eps64*ndet))",
       "family": "casci_electron_count_conservation",
       "id": "PS-MCSCF-001",
       "invariant": "trace(casdm1) == sum(nelecas), where casdm1 = fcisolver.make_rdm1(fcivec, ncas, nelecas)",
@@ -280,31 +280,31 @@
       "symbol": "kernel"
     },
     {
-      "alarm": "max(abs(D_before - D_after)) exceeds 50*eps64*nao*cond(S)",
+      "alarm": "max(abs(D_before - D_after)) exceeds 50*eps64*nao*cond(S) (2026-10-09: when cas_natorb=True the tolerance is increased by 2*sum(deviation of folded occupations)*max(1,max|C|^2))",
       "family": "casscf_canonicalization_density_invariance",
       "id": "PS-MCSCF-002",
       "invariant": "total density matrix (2*mocore@mocore.T + mocas@casdm1@mocas.T) is unchanged by canonicalize()",
       "observation_point": "a re-call sanitizer wrapping canonicalize(), computing the total density matrix from the (mo_coeff, ci) pair before the call and from (mo_coeff1, ci) after",
-      "precondition": "any single-state (non-state-averaged) CASCI/CASSCF canonicalize() call, sort True/False, cas_natorb True/False, RHF-based (restricted-orbital) reference -- excluding UHF-based CASSCF (independent alpha/beta rotations, a different bookkeeping convention)",
+      "precondition": "any single-state (non-state-averaged) CASCI/CASSCF canonicalize() call, sort True/False, cas_natorb True/False, RHF-based (restricted-orbital) reference -- excluding UHF-based CASSCF (independent alpha/beta rotations, a different bookkeeping convention) AND (2026-10-09) the density invariance is exact only up to the deliberate folding of active natural orbitals with occupation within casci.FRAC_OCC_THRESHOLD (1e-6) of 0 or 2 into core/virtual space (cas_natorb=True, pyscf issue 1041).",
       "rationale": "unlike the shipped PS-SCF-005/PS-LO-001 (a single orbital rotation at fixed occupation), CASSCF canonicalize() with cas_natorb=True is a simultaneous, jointly-consistent pair of transformations: an active-space orbital rotation (from diagonalizing casdm1) and a CI-vector transformation that must use the identical rotation matrix to stay consistent -- a cross-object consistency law with no molecular-RHF or Boys-localization precedent. Step 4 found that when cas_natorb=False (the default), canonicalize() does not rotate the active block or touch the CI vector at all, so the interesting risk surface is specifically cas_natorb=True's joint rotation (including its near-0/near-2-occupation re-canonicalization sub-branch, which re-solves the CI vector from scratch via a fresh FCI kernel call rather than transform_ci_for_orbital_rotation) -- both settings are included in the precondition and both were empirically exercised",
       "scientific_quantity": "CASCI/CASSCF total (core+active) one-particle density matrix under canonicalization",
       "source": "pyscf/mcscf/casci.py",
       "symbol": "canonicalize"
     },
     {
-      "alarm": "abs(sum(noons) - nelectron) exceeds 50*eps64*cond(S) (sum half, any method); max(-noons.min(), noons.max()-2) exceeds 50*eps64*cond(S) (bound half, SCF-level only)",
+      "alarm": "abs(sum(noons) - nelectron) exceeds 50*eps64*cond(S) (sum half, any method); max(-noons.min(), noons.max()-2) exceeds 50*eps64*cond(S) (bound half, SCF-level only) (2026-10-09: the sum half uses 50*eps64*cond(S)*max(1,nelectron)*max(1,max|noons|))",
       "family": "natural_orbital_occupation_conservation",
       "id": "PS-MCSCF-003",
       "invariant": "sum(noons) == mol.nelectron (any method); each noon in [0,2] (SCF-level references only)",
       "observation_point": "at make_natural_orbitals()'s return, after the scipy.linalg.eigh(A, b=S) generalized eigendecomposition",
-      "precondition": "any method_obj with a working make_rdm1(ao_repr=True) (RHF/UHF/ROHF/MP2/CCSD/CASSCF/CISD reference objects, both the spin-traced 2D and spin-separated tuple rdm1 branches) for the sum-conservation half; SCF-level (RHF/UHF/ROHF) reference objects only for the individual-NOON [0,2]-bound half, since only a genuine single-determinant density matrix is guaranteed N-representable by construction -- correlated methods' approximate density matrices are explicitly excluded from the bound half (mp2.py's own make_rdm1 docstring flags its output as an approximation, not rigorously N-representable)",
+      "precondition": "any method_obj with a working make_rdm1(ao_repr=True) (RHF/UHF/ROHF/MP2/CCSD/CASSCF/CISD reference objects, both the spin-traced 2D and spin-separated tuple rdm1 branches) for the sum-conservation half; SCF-level (RHF/UHF/ROHF) reference objects only for the individual-NOON [0,2]-bound half, since only a genuine single-determinant density matrix is guaranteed N-representable by construction -- correlated methods' approximate density matrices are explicitly excluded from the bound half (mp2.py's own make_rdm1 docstring flags its output as an approximation, not rigorously N-representable) (2026-10-09: the SCF-level classification is made on the object passed to make_natural_orbitals, not on its _scf reference; MP2/CC/CAS objects were wrongly treated as SCF-level)",
       "rationale": "this is a third, structurally distinct computational route to the electron count beyond the shipped bank's direct AO-metric trace (PS-SCF-002) and grid-quadrature (PS-DFT-001) routes -- a generalized eigendecomposition via LAPACK, an entirely different numerical algorithm whose correctness is not implied by the input density matrix's own trace already being correct (a correct Dm fed through a buggy or mismatched-basis generalized-eigenproblem call would produce eigenvalues that do not sum to the right total even though Dm's own trace is fine)",
       "scientific_quantity": "natural-orbital occupation numbers (generalized-eigenproblem eigenvalues of the AO-metric-transformed density matrix)",
       "source": "pyscf/mcscf/addons.py",
       "symbol": "make_natural_orbitals"
     },
     {
-      "alarm": "any of the 3 permutation differences exceeds 50*eps64*nmo**1.5*cond(S)",
+      "alarm": "any of the 3 permutation differences exceeds 50*eps64*nmo**1.5*cond(S) (2026-10-09: tolerance additionally multiplied by max(1, max|eri|))",
       "family": "ao2mo_integral_permutation_symmetry",
       "id": "PS-AO2MO-001",
       "invariant": "eri[i,j,k,l] == eri[j,i,k,l] == eri[i,j,l,k] == eri[k,l,i,j] (the 3 independent constraints implying full 8-fold symmetry for this same-orbital-set real case)",
@@ -316,7 +316,7 @@
       "symbol": "general"
     },
     {
-      "alarm": "epcm exceeds 50*eps64*max(abs(epcm), 1e-8)",
+      "alarm": "epcm exceeds 50*eps64*max(abs(epcm), 1e-8) (2026-10-09: tolerance max(50*eps64*|epcm|, 1e-12 Ha))",
       "family": "implicit_solvent_energy_sign",
       "id": "PS-SOLV-001",
       "invariant": "epcm <= 0 for eps>1",
@@ -328,7 +328,7 @@
       "symbol": "DDCOSMO._get_vind, PCM._get_vind"
     },
     {
-      "alarm": "max(abs(A @ B.T - norm_to*eye(3))) exceeds 50*eps64*cond(A), compared against a from-scratch cross-product/triple-product re-derivation of b (not the same numpy.linalg.inv call the function under test uses)",
+      "alarm": "max(abs(A @ B.T - norm_to*eye(3))) exceeds 50*eps64*cond(A), compared against a from-scratch cross-product/triple-product re-derivation of b (not the same numpy.linalg.inv call the function under test uses) (2026-10-09: tolerance 50*eps64*cond(a)*abs(norm_to)/(2*pi); identical to before for the default norm_to = 2*pi)",
       "family": "pbc_reciprocal_lattice_duality",
       "id": "PS-PBC-001",
       "invariant": "a_i . b_j == norm_to * delta_ij",
@@ -345,7 +345,7 @@
       "id": "PS-PBC-003",
       "invariant": "Cell.ewald()'s direct real+reciprocal-space summation agrees with particle_mesh_ewald()'s FFT/B-spline approximation, within PME's own interpolation/grid discretization error",
       "observation_point": "inside ewald(), when the PME branch is taken: a re-call sanitizer additionally computes the direct-summation path (temporarily overriding use_particle_mesh_ewald=False) and compares",
-      "precondition": "any Cell with dimension==3, use_particle_mesh_ewald=True, any lattice, any nonzero-charge atom configuration, any ew_eta/ew_cut/interpolation order -- the law holds for any cell where both methods are computable, not narrowed to large-cell-only use cases",
+      "precondition": "any Cell with dimension==3, use_particle_mesh_ewald=True, any lattice, any nonzero-charge atom configuration, any ew_eta/ew_cut/interpolation order -- the law holds for any cell where both methods are computable, not narrowed to large-cell-only use cases AND (2026-10-09) the real-space Ewald sum is converged: erfc(ew_eta*ew_cut) <= 1e-7 (default parameters satisfy this; the two paths truncate the real-space sum differently, shell vs sphere).",
       "rationale": "Step 4 found particle_mesh_ewald() actually shares the real-space (ewovrl, via the identical compiled _get_ewald_direct kernel) and self-energy (ewself, identical closed-form expression) terms bit-for-bit with the direct path -- a stronger shared-arithmetic situation than the scan candidate assumed; only the reciprocal-space term (ewg, a B-spline/FFT convolution vs. a direct Gv-grid sum) genuinely differs, cleanly isolating any disagreement to a genuine discretization-error comparison rather than roundoff. A genuine correctness bug in either algorithm's distinct reciprocal-space construction would not be locally visible from either function's own code",
       "scientific_quantity": "electrostatic (Madelung) lattice energy, computed via two structurally different Ewald-summation algorithms",
       "source": "pyscf/pbc/gto/cell.py, pyscf/pbc/gto/ewald_methods.py",
@@ -381,7 +381,7 @@
       "id": "PS-PBC-006",
       "invariant": "ecell.ewald() <= 0 (the probe-charge self-energy is stabilizing for a reasonably-shaped 3D lattice, the crystal-electrostatics analogue of the shipped PS-SOLV-001's continuum-dielectric sign theorem)",
       "observation_point": "inside madelung(), immediately after ecell.ewald() is computed, before the -2x rescale is applied and returned",
-      "precondition": "any Cell with dimension==3, omega==0 (full-range Coulomb; the omega!=0 range-separated branch is a different physical partial-range quantity, explicitly out of scope), any Monkhorst-Pack mesh size including Nk=(1,1,1) -- AND (added 2026-09-23, see fix note below) the Nk-scaled ecell's own lattice-vector-length aspect ratio max(|a_i|)/min(|a_i|) <= 3.0. Cells built as a large-vacuum-padded 3D box around a short periodic axis to emulate a lower-dimensional system (the standard workaround when a code path requires dimension>1) fall outside this precondition.",
+      "precondition": "any Cell with dimension==3, omega==0 (full-range Coulomb; the omega!=0 range-separated branch is a different physical partial-range quantity, explicitly out of scope), any Monkhorst-Pack mesh size including Nk=(1,1,1) -- AND (added 2026-09-23, see fix note below) the Nk-scaled ecell's own lattice-vector-length aspect ratio max(|a_i|)/min(|a_i|) <= 3.0. Cells built as a large-vacuum-padded 3D box around a short periodic axis to emulate a lower-dimensional system (the standard workaround when a code path requires dimension>1) fall outside this precondition. (2026-10-09: the aspect ratio is measured on a Minkowski-style reduced basis of ecell's lattice, not on the supplied vectors; a skew choice of basis for an elongated lattice made the supplied-vector ratio 1.02 instead of 5.9)",
       "rationale": "Step 4 finding: the scan candidate's originally-proposed observation point (madelung()'s own OUTPUT) is NOT reliably negative -- empirically found POSITIVE in every trial of a 4-lattice sweep, because the -2x convention factor (used to convert the raw self-energy into the exact-exchange finite-size-correction magnitude) flips the sign of the actually-well-understood physical quantity. This is a Step 4 correction to the candidate, not a rejection of the underlying law: the genuinely well-understood, textbook-confirmable sign statement is about ecell.ewald() itself, observed at the earlier point inside madelung() before the sign-flipping rescale. ecell.ewald()'s own three-term sum (real-space erfc sum, self-energy, reciprocal-space Gv-grid sum) has a documented history of subtle sign/factor errors (the function's own inline comment flags a textbook reference formula as 'off by a factor of 2, the exponent is wrong ... and the square is in the wrong place'), so this is not an algebraically-guaranteed sign",
       "scientific_quantity": "electrostatic self-energy of a single probe unit point charge and its periodic images in a neutralizing background (crystal-lattice Ewald summation), observed before madelung()'s -2x exact-exchange-convention rescale",
       "source": "pyscf/pbc/tools/pbc.py",

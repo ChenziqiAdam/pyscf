@@ -516,8 +516,8 @@ def madelung(cell, kpts, omega=None):
                 # checker's own docstring for the root-cause investigation.
                 # Scope it on ecell's own (Nk-scaled) lattice-vector-length
                 # aspect ratio, computed cheaply from data already in hand.
-                _lens = np.linalg.norm(a, axis=1)
-                _aspect_ratio = float(_lens.max() / _lens.min())
+                # (basis-invariant: measured on a reduced basis of the lattice)
+                _aspect_ratio = _sc.reduced_aspect_ratio(a)
                 _sc.check_pbc_madelung_correction_sign(
                     float(_ewald_val), aspect_ratio=_aspect_ratio,
                     dimension=cell.dimension)

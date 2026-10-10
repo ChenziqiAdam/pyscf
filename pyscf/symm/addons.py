@@ -78,6 +78,8 @@ def label_orb_symm(mol, irrep_name, symm_orb, mo, s=None,
             ovlpso[numpy.diag_indices(csym.shape[1])] += 1e-12
             s_moso = lib.cho_solve(ovlpso, moso)
         norm[i] = numpy.einsum('ki,ki->i', moso.conj(), s_moso).real
+    _proj_total = numpy.sum(norm, axis=0)
+    _mo_norm = numpy.einsum('ki,ki->i', mo.conj(), s_mo).real
     norm /= numpy.sum(norm, axis=0)  # for orbitals which are not normalized
     iridx = numpy.argmax(norm, axis=0)
     orbsym = numpy.asarray([irrep_name[i] for i in iridx])
@@ -87,7 +89,7 @@ def label_orb_symm(mol, irrep_name, symm_orb, mo, s=None,
     try:
         from pyscf import _scientific_checkers as _sc
         if _sc.enabled():
-            _sc.check_orbital_irrep_purity(largest_norm, check, tol)
+            _sc.check_orbital_irrep_purity(_proj_total, _mo_norm)
     except Exception:
         pass
 

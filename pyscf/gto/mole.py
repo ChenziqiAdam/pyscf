@@ -2625,7 +2625,7 @@ class MoleBase(lib.StreamObject):
             from pyscf import _scientific_checkers as _sc
             if _sc.enabled() and getattr(self, 'cart', False) is False:
                 _s_diag = numpy.diag(self.intor_symmetric('int1e_ovlp'))
-                _sc.check_ao_self_overlap_normalization(_s_diag)
+                _sc.check_ao_self_overlap_normalization(_s_diag, self)
         except Exception:
             pass
 
