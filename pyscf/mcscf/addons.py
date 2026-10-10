@@ -363,7 +363,7 @@ def make_natural_orbitals (method_obj):
             _scf_level = isinstance(
                 method_obj, (scf.hf.RHF, scf.rohf.ROHF, scf.uhf.UHF))
             _sc.check_natural_orbital_occupation_conservation(
-                noons, mf.mol.nelectron, S, _scf_level)
+                noons, mf.mol.nelectron, S, _scf_level, dm_max=float(numpy.abs(Dm).max()))
     except Exception:
         pass
 

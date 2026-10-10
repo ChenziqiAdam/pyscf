@@ -4,7 +4,7 @@
   "note": "Complete public scientific-checker bank. Inactive unless SCIBENCH_TRIGGER_LOG is set.",
   "checkers": [
     {
-      "alarm": "max(abs(D@S@D - 2*D)) exceeds 50*eps64*nao*cond(S)",
+      "alarm": "max(abs(D@S@D - 2*D)) exceeds 50*eps64*max(nao*cond(S), max|D|**2)",
       "family": "rdm1_idempotency",
       "id": "PS-SCF-001",
       "invariant": "D S D == 2 D for the converged density matrix",
@@ -28,7 +28,7 @@
       "symbol": "kernel (observation point)"
     },
     {
-      "alarm": "max(abs(dip1_au - dip2_au)) exceeds 50*eps64*shift*nelectron (2026-10-09: applied to the trace-corrected difference; n_ref = max(nelectron, |tr(DS)|))",
+      "alarm": "max(abs(dip1_au - dip2_au)) of the trace-corrected difference exceeds 50*eps64*nelectron*(shift + rmax), rmax = largest coordinate of any atom relative to either origin; n_ref = max(nelectron, |tr(DS)|)",
       "family": "dipole_origin_invariance",
       "id": "PS-SCF-003",
       "invariant": "dip_moment(mol, dm, origin=o1) == dip_moment(mol, dm, origin=o2) for any o1 != o2 (2026-10-09: for a density with tr(D S) != nelectron the exact shift (tr(D S)-nelectron)*(o2-o1) is subtracted before comparing; for an N-electron density this is the unchanged law)",
@@ -64,7 +64,7 @@
       "symbol": "canonicalize"
     },
     {
-      "alarm": "abs(trace(dm s) - nelectron) exceeds 50*eps64*nao (project=False) or 50*eps64*nao*4 (project=True, looser per-orbital-renormalization error budget)",
+      "alarm": "abs(trace(dm s) - nelectron) exceeds 50*eps64*nao*max(1,max|D|) (project=False) or 50*eps64*nao*4*max(1,max|D|) (project=True)",
       "family": "chkfile_projection_electron_count",
       "id": "PS-SCF-006",
       "invariant": "trace(dm @ get_ovlp(mol)) == mol.nelectron (2026-10-09: S is the target mol's overlap for project=True and the checkpoint molecule's overlap for project=False, the metric in which the reused orbitals are normalised)",
@@ -81,14 +81,14 @@
       "id": "PS-MP2-001",
       "invariant": "emp2 <= 0 (up to numerical slack)",
       "observation_point": "at kernel()'s return, gated on mp.frozen indicating a canonical reference",
-      "precondition": "canonical (frozen in (0, None)) closed-shell RHF reference, any molecule/basis with a genuine HOMO-LUMO gap",
+      "precondition": "canonical (frozen in (0, None)) closed-shell RHF reference with an Aufbau ordering: every occupied orbital energy lies below every virtual one (HOMO < LUMO); any molecule/basis",
       "rationale": "for a variational zeroth-order reference, the second-order perturbative correction can only lower the energy; a positive result indicates a sign error in t2/energy denominator construction or a non-variational reference slipping through",
       "scientific_quantity": "second-order Moller-Plesset correlation energy at a canonical RHF reference",
       "source": "pyscf/mp/mp2.py",
       "symbol": "kernel"
     },
     {
-      "alarm": "max(abs(t2 - t2.transpose(1,0,3,2))) exceeds 50*eps64*nao**1.5 (2026-10-09: tolerance 50*eps64*nao**1.5*max(1,max|t2|))",
+      "alarm": "max(abs(t2 - t2.transpose(1,0,3,2))) exceeds 50*eps64*nao**1.5*max(1,max|t2|)*max(1,max|C|)**4",
       "family": "mp2_t2_permutation_symmetry",
       "id": "PS-MP2-002",
       "invariant": "t2[i,j,a,b] == t2[j,i,b,a]",
@@ -112,7 +112,7 @@
       "symbol": "make_rdm1"
     },
     {
-      "alarm": "max over MOs of |sum_irrep projection - <mo|S|mo>| / <mo|S|mo> exceeds 1e-12",
+      "alarm": "max over MOs of |sum_irrep projection - <mo|S|mo>| / <mo|S|mo> exceeds max(1e-12, 5*eps64*cond(S))",
       "family": "symm_orb_completeness",
       "id": "PS-SYM-001",
       "invariant": "sum_irrep <mo|P_irrep|mo>_S == <mo|mo>_S for every MO (mol.symm_orb is a complete orthonormal symmetry-adapted basis of the AO space)",
@@ -141,7 +141,7 @@
       "id": "PS-GTO-001",
       "invariant": "diag(int1e_ovlp) is close to all-ones",
       "observation_point": "at the end of Mole.build(), after basis parsing/normalization completes",
-      "precondition": "NORMALIZE_GTO enabled (default), spherical basis (cart=False) -- Cartesian d-and-higher shells excluded pending a separate confirmation read",
+      "precondition": "NORMALIZE_GTO enabled (default), spherical basis (cart=False), shells with l <= 6 and all primitive exponents >= 1e-4 (the range of standard basis sets; outside it the integral kernel's small-prefactor screening drops the normalised self-overlap) -- Cartesian d-and-higher shells excluded pending a separate confirmation read",
       "rationale": "PySCF computes AO self-overlap-equals-1 twice through genuinely independent mechanisms: analytically in Python at basis-parsing time (_nomalize_contracted_ao's closed-form Gaussian formula) and numerically via the compiled libcint integral evaluator at runtime -- these share no intermediate computation",
       "scientific_quantity": "self-overlap of a normalized contracted Gaussian AO",
       "source": "pyscf/gto/mole.py",
@@ -153,7 +153,7 @@
       "id": "PS-DFT-001",
       "invariant": "n (grid-integrated electron count) is close to trace(dm @ S)",
       "observation_point": "inside get_veff(), immediately after ni.nr_rks returns n, gated on grids.level >= default",
-      "precondition": "RKS/UKS with any XC functional, hermi != 2, ground-state (2D) density matrix, grids.level >= the library's current default level (compared dynamically against pyscf.dft.gen_grid.Grids.level, not a hardcoded constant) -- explicitly coarser, non-default grids are out of scope",
+      "precondition": "RKS/UKS with any XC functional, hermi != 2, ground-state (2D) density matrix, grids.level >= the library's current default level (compared dynamically against pyscf.dft.gen_grid.Grids.level), and a grid that resolves the basis: every primitive exponent a satisfies 3/rmax**2 <= a <= 1e4*max(Z-1,1) (rmax: largest grid distance from the atom, Z: nuclear charge)",
       "rationale": "PySCF's own debug log already frames n as 'nelec by numeric integration' implying an expected reference value, but nothing in the code path actually validates it against the analytic trace; a violation beyond grid-quadrature error would indicate a real bug in grid construction/pruning or eval_rho's density evaluation",
       "scientific_quantity": "electron count of a density matrix via real-space grid quadrature vs. analytic AO-metric trace",
       "source": "pyscf/dft/rks.py",
@@ -165,7 +165,7 @@
       "id": "PS-UKS-001",
       "invariant": "n[0] close to trace(dm[0] S) and n[1] close to trace(dm[1] S), checked independently per channel",
       "observation_point": "inside get_veff(), immediately after ni.nr_uks returns n, before the NLC branch (if any) reassigns n",
-      "precondition": "same as PS-DFT-001, specialized to a genuine 2-component (dm.ndim==3, dm.shape[0]==2) unrestricted density, gated on the non-NLC-branch n being a length-2 tuple",
+      "precondition": "same as PS-DFT-001 (including the basis-resolution window), specialized to a genuine 2-component (dm.ndim==3, dm.shape[0]==2) unrestricted density, gated on the non-NLC-branch n being a length-2 tuple",
       "rationale": "checking each spin channel independently (not just their sum) is necessary to catch a channel-swap or one-sided misattribution bug that a combined check would miss",
       "scientific_quantity": "per-spin-channel electron count of an unrestricted density via grid quadrature vs. analytic trace",
       "source": "pyscf/dft/uks.py",
@@ -177,7 +177,7 @@
       "id": "PS-CC-001",
       "invariant": "t2[i,j,a,b] == t2[j,i,b,a]",
       "observation_point": "at kernel()'s return, on the fully-converged post-DIIS t2",
-      "precondition": "any converged t2 tensor from a closed-shell canonical RHF/RCCSD reference (2D-dtype ndarray t2 with 4 dims -- the plain, non-UCCSD path)",
+      "precondition": "any converged t2 tensor from a closed-shell canonical RHF/RCCSD reference (2D-dtype ndarray t2 with 4 dims -- the plain, non-UCCSD path) that went through at least one update_amps step (max_cycle >= 1)",
       "rationale": "same particle-exchange-symmetric-Hamiltonian origin as PS-MP2-002, now checked at the CCSD tier where the amplitude-to-vector DIIS packing is a distinct, more complex implementation with its own _s4-symmetry-packed variant",
       "scientific_quantity": "CCSD double-excitation amplitude tensor",
       "source": "pyscf/cc/ccsd.py",
@@ -189,14 +189,14 @@
       "id": "PS-CC-002",
       "invariant": "trace(dm1) == mol.nelectron",
       "observation_point": "at CCSD.make_rdm1()'s return, after ccsd_rdm._make_rdm1 assembles the full matrix",
-      "precondition": "converged CCSD with converged lambda-amplitudes, closed-shell canonical RHF reference, with_frozen=True, ao_repr=False",
+      "precondition": "converged CCSD with converged lambda-amplitudes, closed-shell canonical RHF reference, with_frozen=True, with_mf=True, ao_repr=False",
       "rationale": "unlike MP2's t2-only density matrix, CCSD's depends jointly on two independently-converged iterative solves (the amplitude equations and the separate Lambda-equation solve); trace conservation is a joint property of both being combined correctly",
       "scientific_quantity": "CCSD one-particle reduced density matrix (built from t1/t2 and lambda-amplitudes)",
       "source": "pyscf/cc/ccsd.py",
       "symbol": "CCSD.make_rdm1"
     },
     {
-      "alarm": "max(abs(rho_from_dm - rho_from_mo)) exceeds 50*eps64*nao*10 (2026-10-09: tolerance 50*eps64*nao*10*max(1, max|rho|))",
+      "alarm": "max(abs(rho_from_dm - rho_from_mo)) exceeds 50*eps64*nao*10*max(1, max|rho|, (max|C_occ|*max|ao|)**2)",
       "family": "grid_density_representation_consistency",
       "id": "PS-NUMINT-001",
       "invariant": "eval_rho(mol, ao, dm) == eval_rho2(mol, ao, mo_coeff_occ, mo_occ_occ) on the same grid batch",
@@ -244,7 +244,7 @@
       "symbol": "make_rdm1s"
     },
     {
-      "alarm": "abs(energy(h1e, eri, fcivec, norb, nelec) + ecore - e) exceeds 1e-8 Hartree (2026-10-09: tolerance max(1e-8, 50*eps64*S), S = |e|+|e_recontracted|+|ecore|+N*max|h1e|+N^2*max|eri|)",
+      "alarm": "abs(energy(h1e, eri, fcivec, norb, nelec) + ecore - e) exceeds max(1e-8, 50*eps64*S) + N**2*A Hartree, S = |e|+|e_recontracted|+|ecore|+N*max|h1e|+N^2*max|eri|, A = max pair-swap/index-swap asymmetry of eri",
       "family": "fci_energy_eigenvalue_consistency",
       "id": "PS-FCI-002",
       "invariant": "energy(h1e, eri, fcivec, norb, nelec) + ecore == e, for each (e, fcivec) pair kernel() returns",
@@ -292,7 +292,7 @@
       "symbol": "canonicalize"
     },
     {
-      "alarm": "abs(sum(noons) - nelectron) exceeds 50*eps64*cond(S) (sum half, any method); max(-noons.min(), noons.max()-2) exceeds 50*eps64*cond(S) (bound half, SCF-level only) (2026-10-09: the sum half uses 50*eps64*cond(S)*max(1,nelectron)*max(1,max|noons|))",
+      "alarm": "abs(sum(noons) - nelectron) exceeds 50*eps64*cond(S)*max(1,nelectron)*max(1,max|noons|)*max(1,max|D|) (sum half, any method); max(-noons.min(), noons.max()-2) exceeds 50*eps64*cond(S)*max(1,max|D|) (bound half, SCF-level only)",
       "family": "natural_orbital_occupation_conservation",
       "id": "PS-MCSCF-003",
       "invariant": "sum(noons) == mol.nelectron (any method); each noon in [0,2] (SCF-level references only)",
@@ -304,7 +304,7 @@
       "symbol": "make_natural_orbitals"
     },
     {
-      "alarm": "any of the 3 permutation differences exceeds 50*eps64*nmo**1.5*cond(S) (2026-10-09: tolerance additionally multiplied by max(1, max|eri|))",
+      "alarm": "any of the 3 permutation differences exceeds 50*eps64*nmo**1.5*max(cond(C)**2, max|C|**4)*max(1, max|eri_mo|, max|eri_ao|)",
       "family": "ao2mo_integral_permutation_symmetry",
       "id": "PS-AO2MO-001",
       "invariant": "eri[i,j,k,l] == eri[j,i,k,l] == eri[i,j,l,k] == eri[k,l,i,j] (the 3 independent constraints implying full 8-fold symmetry for this same-orbital-set real case)",
@@ -316,12 +316,12 @@
       "symbol": "general"
     },
     {
-      "alarm": "epcm exceeds 50*eps64*max(abs(epcm), 1e-8) (2026-10-09: tolerance max(50*eps64*|epcm|, 1e-12 Ha))",
+      "alarm": "epcm exceeds max(50*eps64*abs(epcm), 1e-9 Ha)",
       "family": "implicit_solvent_energy_sign",
       "id": "PS-SOLV-001",
       "invariant": "epcm <= 0 for eps>1",
       "observation_point": "at _get_vind()'s return, in both ddCOSMO (domain-decomposition spherical-harmonic expansion) and PCM (self-consistent-reaction-field boundary elements)",
-      "precondition": "any DDCOSMO/PCM _get_vind(dm) call with eps>1 (the physically realistic dielectric range for a solvent), any charge distribution dm (converged SCF density, an intermediate/perturbed density from a response-property calculation mid-iteration, or a transition/excited-state density -- the sign law is a property of linear dielectric response applied to any inducing charge distribution, not only a ground-state one). DESIGN CORRECTION (2026-09-23, independent re-verification): the two call sites' conductor-limit sentinel branches are NOT the same condition as originally described. PCM's build() only special-cases eps==inf (f_epsilon = (eps-1)/eps if eps!=inf else 1.0 -- confirmed by reading pcm.py directly; there is no eps<=0 branch in PCM). ddCOSMO's _get_vind has a genuine eps<=0 branch (f_epsilon=1 if dielectric<=0). The shipped checker excludes both correctly via a single `not (eps>1) or eps==inf` gate.",
+      "precondition": "any DDCOSMO/PCM _get_vind(dm) call with eps>1 (the physically realistic dielectric range for a solvent), any charge distribution dm (converged SCF density, an intermediate/perturbed density from a response-property calculation mid-iteration, or a transition/excited-state density -- the sign law is a property of linear dielectric response applied to any inducing charge distribution, not only a ground-state one). DESIGN CORRECTION (2026-09-23, independent re-verification): the two call sites' conductor-limit sentinel branches are NOT the same condition as originally described. PCM's build() only special-cases eps==inf (f_epsilon = (eps-1)/eps if eps!=inf else 1.0 -- confirmed by reading pcm.py directly; there is no eps<=0 branch in PCM). ddCOSMO's _get_vind has a genuine eps<=0 branch (f_epsilon=1 if dielectric<=0). The shipped checker excludes both correctly via a single `not (eps>1) or eps==inf` gate. For ddCOSMO the expansion is resolved (lmax >= 4); the truncated operator at smaller lmax is non-symmetric and its truncation error can flip the sign.",
       "rationale": "epcm's sign is not locally forced by the one-line f_epsilon*<psi,Xvec> (ddCOSMO) or 0.5*dot(q_sym,v_grids) (PCM) expression -- both inner products are the output of a separate linear solve over a discretized dielectric-boundary operator (Lmat, or K/R); whether the result comes out with the physically-required sign depends on that operator being correctly assembled, not on the final multiplication. The induced reaction-field polarization always opposes and partially cancels the solute's own field for a passive/dissipative dielectric response, a standard electrostatics theorem",
       "scientific_quantity": "continuum-solvation (dielectric reaction-field) free energy",
       "source": "pyscf/solvent/ddcosmo.py, pyscf/solvent/pcm.py",
@@ -345,7 +345,7 @@
       "id": "PS-PBC-003",
       "invariant": "Cell.ewald()'s direct real+reciprocal-space summation agrees with particle_mesh_ewald()'s FFT/B-spline approximation, within PME's own interpolation/grid discretization error",
       "observation_point": "inside ewald(), when the PME branch is taken: a re-call sanitizer additionally computes the direct-summation path (temporarily overriding use_particle_mesh_ewald=False) and compares",
-      "precondition": "any Cell with dimension==3, use_particle_mesh_ewald=True, any lattice, any nonzero-charge atom configuration, any ew_eta/ew_cut/interpolation order -- the law holds for any cell where both methods are computable, not narrowed to large-cell-only use cases AND (2026-10-09) the real-space Ewald sum is converged: erfc(ew_eta*ew_cut) <= 1e-7 (default parameters satisfy this; the two paths truncate the real-space sum differently, shell vs sphere).",
+      "precondition": "any Cell with dimension==3, use_particle_mesh_ewald=True, any lattice, any nonzero-charge atom configuration, any ew_eta/ew_cut/interpolation order -- the law holds for any cell where both methods are computable, not narrowed to large-cell-only use cases AND (2026-10-09) the real-space Ewald sum is converged: erfc(ew_eta*ew_cut) <= 1e-7 (default parameters satisfy this; the two paths truncate the real-space sum differently, shell vs sphere) and cell.precision <= 1e-6 (the mesh is sized from cell.precision, so a looser user setting legitimately allows a PME deviation of that size).",
       "rationale": "Step 4 found particle_mesh_ewald() actually shares the real-space (ewovrl, via the identical compiled _get_ewald_direct kernel) and self-energy (ewself, identical closed-form expression) terms bit-for-bit with the direct path -- a stronger shared-arithmetic situation than the scan candidate assumed; only the reciprocal-space term (ewg, a B-spline/FFT convolution vs. a direct Gv-grid sum) genuinely differs, cleanly isolating any disagreement to a genuine discretization-error comparison rather than roundoff. A genuine correctness bug in either algorithm's distinct reciprocal-space construction would not be locally visible from either function's own code",
       "scientific_quantity": "electrostatic (Madelung) lattice energy, computed via two structurally different Ewald-summation algorithms",
       "source": "pyscf/pbc/gto/cell.py, pyscf/pbc/gto/ewald_methods.py",

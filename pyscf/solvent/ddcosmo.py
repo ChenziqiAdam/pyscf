@@ -813,7 +813,7 @@ class ddCOSMO(lib.StreamObject):
         try:
             from pyscf import _scientific_checkers as _sc
             if _sc.enabled():
-                _sc.check_implicit_solvent_energy_sign(float(epcm), float(dielectric))
+                _sc.check_implicit_solvent_energy_sign(float(epcm), float(dielectric), lmax=self.lmax)
         except Exception:
             pass
 

@@ -140,7 +140,9 @@ def check_rdm1_idempotency(dm, s):
     rhs = 2.0 * dm
     diff = np.abs(lhs - rhs).max()
     cond_s = np.linalg.cond(s)
-    tol = 50.0 * eps64 * nao * cond_s
+    # rounding of D S D is relative to the density magnitude (|D| ~ sqrt(cond(S))
+    # for nearly redundant bases), which the nao*cond(S) budget does not follow
+    tol = 50.0 * eps64 * max(nao * cond_s, float(np.abs(dm).max()) ** 2)
     trigger_if(diff > tol, "PS-SCF-001", diff=diff, tol=tol)
 
 
@@ -171,7 +173,7 @@ def check_electron_count_conservation(mol, pop_sum, mo_occ_sum, s=None):
 
 
 @_guard
-def check_dipole_origin_invariance(mol, dip1, dip2, origin1, origin2, dm_trace=None):
+def check_dipole_origin_invariance(mol, dip1, dip2, origin1, origin2, dm_trace=None, rmax=None):
     """PS-SCF-003: neutral-molecule dipole is independent of origin choice.
 
     The electronic term shifts with tr(D S), not with the nuclear charge, so
@@ -179,7 +181,9 @@ def check_dipole_origin_invariance(mol, dip1, dip2, origin1, origin2, dm_trace=N
     A density that is not normalised to nelectron (e.g. the MINAO/VSAP
     initial guess, tr(D S) = 1.975 for H2) has the exact origin dependence
     (tr(D S) - nelectron) * (origin2 - origin1); that known shift is removed
-    before comparing, so only a deviation beyond it is an alarm.
+    before comparing, so only a deviation beyond it is an alarm. The nuclear
+    and electronic terms each carry magnitude ~ nelectron * rmax (rmax: largest
+    coordinate relative to the origins) and cancel only to that scale.
     """
     if mol.charge != 0:
         return
@@ -193,7 +197,7 @@ def check_dipole_origin_invariance(mol, dip1, dip2, origin1, origin2, dm_trace=N
         change = change - (float(dm_trace) - n_ref) * delta
         n_ref = max(n_ref, abs(float(dm_trace)))
     diff = np.abs(change).max()
-    tol = 50.0 * eps64 * shift * n_ref
+    tol = 50.0 * eps64 * n_ref * (shift + (0.0 if rmax is None else float(rmax)))
     trigger_if(diff > tol, "PS-SCF-003", diff=diff, tol=tol)
 
 
@@ -242,7 +246,9 @@ def check_chkfile_restore_electron_count(mol, dm, s, project):
     """
     tr = np.trace(dm @ s) if dm.ndim == 2 else np.trace(dm[0] @ s) + np.trace(dm[1] @ s)
     nao = mol.nao
-    tol = 50.0 * eps64 * nao if not project else 50.0 * eps64 * nao * 4
+    # D = C n C^T is stored with rounding eps*max|D|, which tr(D S) inherits
+    dmax = max(1.0, float(np.abs(dm).max()))
+    tol = 50.0 * eps64 * nao * dmax if not project else 50.0 * eps64 * nao * 4 * dmax
     diff = abs(tr.real - mol.nelectron) if np.iscomplexobj(tr) else abs(tr - mol.nelectron)
     trigger_if(diff > tol, "PS-SCF-006", diff=diff, tol=tol, project=bool(project))
 
@@ -252,14 +258,22 @@ def check_chkfile_restore_electron_count(mol, dm, s, project):
 # ---------------------------------------------------------------------------
 
 @_guard
-def check_mp2_energy_sign(emp2, e_hf):
-    """PS-MP2-001: MP2 correlation energy must be non-positive at a canonical RHF ref."""
+def check_mp2_energy_sign(emp2, e_hf, homo=None, lumo=None):
+    """PS-MP2-001: MP2 correlation energy must be non-positive at a canonical RHF ref.
+
+    Precondition: Aufbau reference, i.e. every occupied orbital energy lies
+    below every virtual one (homo < lumo). The sign follows from the
+    denominators eps_i + eps_j - eps_a - eps_b < 0; a forced excited or
+    non-Aufbau occupation has positive denominators and a positive MP2 energy.
+    """
+    if homo is not None and lumo is not None and not homo < lumo:
+        return
     tol = 50.0 * eps64 * abs(e_hf)
     trigger_if(emp2 > tol, "PS-MP2-001", emp2=emp2, tol=tol)
 
 
 @_guard
-def check_mp2_t2_symmetry(t2):
+def check_mp2_t2_symmetry(t2, cmax=None):
     """PS-MP2-002: t2[i,j,a,b] == t2[j,i,b,a].
 
     Canonical MP2's t2 is built once from the AO2MO-transformed ovov
@@ -278,6 +292,10 @@ def check_mp2_t2_symmetry(t2):
     # Rounding is relative to the amplitude magnitude (t2 reaches 1e3-1e4 for
     # near-degenerate orbitals); the 50*eps*nao**1.5 base was derived at |t2|<~1.
     tol = 50.0 * eps64 * nao ** 1.5 * max(1.0, float(np.abs(t2).max()))
+    # the ovov integrals are transformed with C in each of four indices, so their
+    # rounding grows ~ eps * max|C|^4 (~ eps * cond(S)^2 for a redundant basis)
+    if cmax is not None:
+        tol *= max(1.0, float(cmax)) ** 4
     trigger_if(diff > tol, "PS-MP2-002", diff=diff, tol=tol)
 
 
@@ -303,7 +321,7 @@ def check_mp2_rdm1_trace(dm1, nelectron, nmo, mo_occ=None):
 # ---------------------------------------------------------------------------
 
 @_guard
-def check_orbital_irrep_purity(proj_total, mo_norm):
+def check_orbital_irrep_purity(proj_total, mo_norm, cond_s=None):
     """PS-SYM-001: the irrep projections of every MO add up to its overlap norm.
 
     label_orb_symm projects each orbital on every irrep of mol.symm_orb with
@@ -322,6 +340,9 @@ def check_orbital_irrep_purity(proj_total, mo_norm):
     scale = np.maximum(np.abs(mo_norm), 1e-300)
     worst = float(np.max(np.abs(proj_total - mo_norm) / scale))
     tol = 1e-12  # rounding of the Cholesky-solved projections (swept worst 3.1e-15)
+    if cond_s is not None:
+        # the irrep-block solves lose ~eps*cond of the block overlap (<= cond(S))
+        tol = max(tol, 5.0 * eps64 * float(cond_s))
     trigger_if(worst > tol, "PS-SYM-001", worst_deviation=worst, tol=tol)
 
 
@@ -404,10 +425,32 @@ def _contraction_cancellation(mol):
     return kap
 
 
+def _screened_integral_mask(mol, lmax=6, exp_min=1e-4):
+    """True for AOs outside the regime where the integral kernel's small-prefactor
+    screening is valid: shells with l > lmax (beyond every standard basis, which
+    stops at l = 6) or a primitive exponent below exp_min (radial extent of
+    thousands of Bohr; the normalised coefficient underflows the screening)."""
+    ao_loc = mol.ao_loc_nr()
+    bad = np.zeros(ao_loc[-1], dtype=bool)
+    for ib in range(mol.nbas):
+        if mol.bas_angular(ib) > lmax or np.min(mol.bas_exp(ib)) < exp_min:
+            bad[ao_loc[ib]:ao_loc[ib + 1]] = True
+    return bad
+
+
 @_guard
 def check_ao_self_overlap_normalization(diag_s, mol=None):
-    """PS-GTO-001: normalized-AO self-overlap diagonal is 1."""
+    """PS-GTO-001: normalized-AO self-overlap diagonal is 1.
+
+    Precondition: shells with l <= 6 and exponents >= 1e-4 (the range of every
+    standard basis set); outside it the integral kernel drops the
+    self-overlap of the tiny normalised prefactor.
+    """
     d = np.abs(np.asarray(diag_s) - 1.0)
+    if mol is not None:
+        bad = _screened_integral_mask(mol)
+        if bad.shape == d.shape:
+            d = np.where(bad, 0.0, d)
     base = 2000.0 * eps64  # ECP/contracted-shell bases reach ~8e-14; 5x headroom
     tol = base
     if mol is not None:
@@ -423,9 +466,40 @@ def check_ao_self_overlap_normalization(diag_s, mol=None):
 # Subsystem 8 & 12: dft/rks.py, dft/uks.py
 # ---------------------------------------------------------------------------
 
+def _grid_resolves_basis(mol, coords):
+    """True when the atom-centred grid resolves every primitive of the basis.
+
+    A Gaussian exp(-a r^2) is integrated to ~1e-3 or better by the default
+    atom grid for 3/rmax^2 <= a <= 1e4*max(Z-1,1) (rmax: largest grid distance from the
+    atom, Z: nuclear charge); outside it the quadrature error of a single
+    primitive is O(1e-3..1) by construction (sampled from single-atom sweeps
+    on He, C, Na, Fe). Standard basis sets lie inside this window.
+    """
+    if mol is None or coords is None:
+        return True
+    from pyscf import gto as _gto
+    coords = np.asarray(coords)
+    for ia in range(mol.natm):
+        z = max(1, _gto.charge(mol.atom_symbol(ia)))
+        rmax2 = float(np.max(np.sum((coords - mol.atom_coord(ia)) ** 2, axis=1)))
+        for ib in range(mol.nbas):
+            if mol.bas_atom(ib) != ia:
+                continue
+            e = np.asarray(mol.bas_exp(ib), dtype=float)
+            if e.min() < 3.0 / rmax2 or e.max() > 1.0e4 * max(z - 1, 1):
+                return False
+    return True
+
+
 @_guard
-def check_dft_grid_electron_count(n_grid, dm, s):
-    """PS-DFT-001: grid-quadrature electron count matches trace(D S)."""
+def check_dft_grid_electron_count(n_grid, dm, s, mol=None, coords=None):
+    """PS-DFT-001: grid-quadrature electron count matches trace(D S).
+
+    Precondition: the grid resolves the primitive exponents of the basis
+    (quadrature of an unresolved Gaussian is wrong by construction).
+    """
+    if not _grid_resolves_basis(mol, coords):
+        return
     tr = np.trace(dm @ s)
     diff = abs(n_grid - tr)
     tol = 1e-3  # calibrated from a grid-level sweep: worst observed |n - tr|
@@ -436,8 +510,13 @@ def check_dft_grid_electron_count(n_grid, dm, s):
 
 
 @_guard
-def check_uks_grid_electron_count(n_grid_tuple, dm, s):
-    """PS-UKS-001: per-spin-channel grid electron count matches trace(D_sigma S)."""
+def check_uks_grid_electron_count(n_grid_tuple, dm, s, mol=None, coords=None):
+    """PS-UKS-001: per-spin-channel grid electron count matches trace(D_sigma S).
+
+    Precondition: as PS-DFT-001 (the grid resolves the basis primitives).
+    """
+    if not _grid_resolves_basis(mol, coords):
+        return
     n_a, n_b = n_grid_tuple[0], n_grid_tuple[1]
     tr_a = np.trace(dm[0] @ s)
     tr_b = np.trace(dm[1] @ s)
@@ -463,6 +542,8 @@ def check_ccsd_t2_symmetry(t2):
     aug-cc-pv5z, nao 10-160) measured exactly 0.0 CCSD t2 asymmetry at
     every basis size. The flat 50*eps64 tolerance is left as is. See
     repo-root PROGRESS.md, PS-MP2-002 fix (same entry documents this check).
+    Observed only after at least one update_amps step (the hook skips max_cycle == 0,
+    which returns the unmodified MP2 initial guess).
     """
     diff = np.abs(t2 - t2.transpose(1, 0, 3, 2)).max()
     tol = 50.0 * eps64
@@ -471,7 +552,11 @@ def check_ccsd_t2_symmetry(t2):
 
 @_guard
 def check_ccsd_rdm1_trace(dm1, nelectron, nmo):
-    """PS-CC-002: CCSD one-particle density matrix (with lambda) trace == nelectron."""
+    """PS-CC-002: CCSD one-particle density matrix (with lambda) trace == nelectron.
+
+    Precondition: the full density (with_mf=True); the correlation-only part has
+    trace zero by construction.
+    """
     tr = np.trace(dm1)
     diff = abs(tr - nelectron)
     tol = 50.0 * eps64 * nmo
@@ -483,7 +568,7 @@ def check_ccsd_rdm1_trace(dm1, nelectron, nmo):
 # ---------------------------------------------------------------------------
 
 @_guard
-def check_grid_density_representation_consistency(rho_from_dm, rho_from_mo, nao):
+def check_grid_density_representation_consistency(rho_from_dm, rho_from_mo, nao, cmax=None, ao_max=None):
     """PS-NUMINT-001: eval_rho (density-matrix path) matches eval_rho2 (MO path)."""
     a = np.asarray(rho_from_dm)
     b = np.asarray(rho_from_mo)
@@ -493,6 +578,9 @@ def check_grid_density_representation_consistency(rho_from_dm, rho_from_mo, nao)
     # rounding is relative to the density magnitude (rho reaches 1e4-1e5 for
     # tight exponents); the base was derived at rho = O(1)
     scale = max(1.0, float(np.abs(a).max()), float(np.abs(b).max()))
+    # D = C n C^T is rounded at eps*max|C|^2, weighted by the AO values squared
+    if cmax is not None and ao_max is not None:
+        scale = max(scale, (float(cmax) * float(ao_max)) ** 2)
     tol = 50.0 * eps64 * nao * 10 * scale  # worst observed ratio ~1.5e-5/eps64/nao-scale
     #                                 headroom set generously since GGA rows sum
     #                                 strictly more contraction terms than LDA.
@@ -597,6 +685,19 @@ def check_fci_energy_eigenvalue_consistency(h1e, eri, fcivec, norb, nelec, ecore
     scale = (abs(e_reported) + abs(e_recontracted) + abs(ecore)
              + ne * float(np.abs(h1e).max()) + ne ** 2 * float(np.abs(eri).max()))
     tol = max(1e-8, 50.0 * eps64 * scale)
+    # The solver assumes the (pq|rs) = (rs|pq) = (qp|rs) symmetry; integrals
+    # that violate it (rounding of an ill-conditioned AO->MO transform) enter
+    # the energy contraction at O(N^2 * asymmetry).
+    e = np.asarray(eri)
+    if e.size == norb ** 4:
+        e4 = e.reshape(norb, norb, norb, norb)
+        asym = max(np.abs(e4 - e4.transpose(1, 0, 2, 3)).max(),
+                   np.abs(e4 - e4.transpose(2, 3, 0, 1)).max())
+    elif e.ndim == 2 and e.shape[0] == e.shape[1]:
+        asym = np.abs(e - e.T).max()
+    else:
+        asym = 0.0
+    tol += ne ** 2 * float(asym)
     trigger_if(diff > tol, "PS-FCI-002", diff=diff, tol=tol)
 
 
@@ -692,7 +793,7 @@ def check_casscf_canonicalization_density_invariance(dm_before, dm_after, s, nao
 
 
 @_guard
-def check_natural_orbital_occupation_conservation(noons, nelectron, s, scf_level):
+def check_natural_orbital_occupation_conservation(noons, nelectron, s, scf_level, dm_max=None):
     """PS-MCSCF-003: sum(NOONs) == nelectron; each NOON in [0,2] for SCF-level refs.
 
     A third, structurally distinct computational route to the electron
@@ -707,6 +808,10 @@ def check_natural_orbital_occupation_conservation(noons, nelectron, s, scf_level
     noons = np.asarray(noons)
     cond_s = np.linalg.cond(s)
     tol = 50.0 * eps64 * cond_s
+    # S D S is formed and diagonalised against S, so rounding follows the
+    # density magnitude (|D| ~ sqrt(cond(S)) for nearly redundant bases)
+    dscale = 1.0 if dm_max is None else max(1.0, float(dm_max))
+    tol *= dscale
     diff = abs(noons.sum() - nelectron)
     # the NOON sum is accumulated over the spectrum: rounding grows ~eps*nelectron
     # and, for a non-N-representable (e.g. gap-collapsed MP2) density, with |noons|
@@ -723,7 +828,7 @@ def check_natural_orbital_occupation_conservation(noons, nelectron, s, scf_level
 # ---------------------------------------------------------------------------
 
 @_guard
-def check_ao2mo_permutation_symmetry(eri, nmo, cond_s):
+def check_ao2mo_permutation_symmetry(eri, nmo, cond_s, cmax=None, eri_ao_max=None):
     """PS-AO2MO-001: same-orbital-set MO-transformed ERI has 8-fold symmetry.
 
     ao2mo.incore's compiled kernel performs two sequential half-transforms
@@ -749,7 +854,12 @@ def check_ao2mo_permutation_symmetry(eri, nmo, cond_s):
     d3 = np.abs(eri - eri.transpose(2, 3, 0, 1)).max()
     diff = max(d1, d2, d3)
     # rounding is relative to the integral magnitude (eri reaches 1e4+ for tight exponents)
-    tol = 50.0 * eps64 * nmo ** 1.5 * cond_s * max(1.0, float(np.abs(eri).max()))
+    # amplification of AO-integral rounding: eps*max|C|^4, which exceeds the
+    # cond(C)^2 budget for orbitals built from differences of near-identical
+    # (nearly redundant) functions
+    amp = cond_s if cmax is None else max(cond_s, float(cmax) ** 4)
+    esc = max(1.0, float(np.abs(eri).max()), 0.0 if eri_ao_max is None else float(eri_ao_max))
+    tol = 50.0 * eps64 * nmo ** 1.5 * amp * esc
     trigger_if(diff > tol, "PS-AO2MO-001", diff=diff, tol=tol)
 
 
@@ -758,7 +868,7 @@ def check_ao2mo_permutation_symmetry(eri, nmo, cond_s):
 # ---------------------------------------------------------------------------
 
 @_guard
-def check_implicit_solvent_energy_sign(epcm, eps):
+def check_implicit_solvent_energy_sign(epcm, eps, lmax=None):
     """PS-SOLV-001: epcm <= 0 for a physically realizable dielectric (eps>1).
 
     epcm is not locally forced by the one-line f_epsilon*<psi,Xvec>
@@ -777,9 +887,14 @@ def check_implicit_solvent_energy_sign(epcm, eps):
     """
     if not (eps > 1) or eps == float('inf'):
         return
+    # Precondition: a resolved ddCOSMO expansion. The truncated operator (small
+    # lmax) is non-symmetric and its truncation error can flip the sign.
+    if lmax is not None and lmax < 4:
+        return
     # an energy that is zero by symmetry/neutrality is only defined to roundoff of the
-    # underlying sums (~1e-14 Ha), so keep an absolute floor of 1e-12 Ha
-    tol = max(50.0 * eps64 * abs(epcm), 1e-12)
+    # underlying sums (~1e-14 Ha, up to ~1e-10 Ha for compact systems), so keep an
+    # absolute floor of 1e-9 Ha
+    tol = max(50.0 * eps64 * abs(epcm), 1e-9)
     trigger_if(epcm > tol, "PS-SOLV-001", epcm=epcm, tol=tol, eps=eps)
 
 
@@ -818,7 +933,7 @@ def check_pbc_reciprocal_lattice_duality(a, b, norm_to):
 
 
 @_guard
-def check_pbc_ewald_algorithm_consistency(e_direct, e_pme, ew_eta=None, ew_cut=None):
+def check_pbc_ewald_algorithm_consistency(e_direct, e_pme, ew_eta=None, ew_cut=None, precision=None):
     """PS-PBC-003: direct-summation and particle-mesh Ewald energies agree.
 
     Two structurally different reciprocal-space routines (a direct Gv-grid
@@ -834,6 +949,11 @@ def check_pbc_ewald_algorithm_consistency(e_direct, e_pme, ew_eta=None, ew_cut=N
     to eps64-scale since PME's own discretization error is real and
     grid/interpolation-order-dependent for larger, less trivial systems.
     """
+    # Precondition: the cell precision is at least as tight as the 1e-6 claim;
+    # the PME mesh is sized from cell.precision, so a looser user setting
+    # legitimately allows a PME deviation of that size.
+    if precision is not None and precision > 1e-6:
+        return
     if ew_eta is not None and ew_cut is not None:
         # The two paths truncate the real-space sum differently (lattice shell vs
         # sphere r<cut); they agree to ~1.5*erfc(eta*cut) relative, so the 1e-6

@@ -1500,7 +1500,8 @@ def dip_moment(mol, dm, unit='Debye', origin=None, verbose=logger.NOTE, **kwargs
                 _dm_trace = float(numpy.einsum(
                     'ij,ji', mol.intor_symmetric('int1e_ovlp'), dm).real)
                 _sc.check_dipole_origin_invariance(mol, mol_dip, _dip2, origin, _shift,
-                                                   dm_trace=_dm_trace)
+                                                   dm_trace=_dm_trace,
+                                                   rmax=float(numpy.abs(coords - origin[None, :]).max()))
         except Exception:
             pass
 

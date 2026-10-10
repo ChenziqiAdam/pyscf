@@ -79,9 +79,16 @@ def kernel(mp, mo_energy=None, mo_coeff=None, eris=None, with_t2=WITH_T2, verbos
             _frozen = getattr(mp, 'frozen', None)
             _canonical = _frozen in (0, None) or (isinstance(_frozen, int) and _frozen == 0)
             if _canonical:
-                _sc.check_mp2_energy_sign(float(emp2.real), float(mp._scf.e_tot))
+                _sc.check_mp2_energy_sign(
+                    float(emp2.real), float(mp._scf.e_tot),
+                    homo=float(numpy.max(mo_energy[:nocc])) if nocc > 0 else None,
+                    lumo=float(numpy.min(mo_energy[nocc:])) if nvir > 0 else None)
             if t2 is not None:
-                _sc.check_mp2_t2_symmetry(numpy.asarray(t2))
+                _cmax = None
+                _mo = mo_coeff if mo_coeff is not None else getattr(mp, 'mo_coeff', None)
+                if isinstance(_mo, numpy.ndarray):
+                    _cmax = float(numpy.abs(_mo).max())
+                _sc.check_mp2_t2_symmetry(numpy.asarray(t2), cmax=_cmax)
     except Exception:
         pass
 

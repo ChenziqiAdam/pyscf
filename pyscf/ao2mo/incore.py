@@ -158,7 +158,10 @@ def general(eri_ao, mo_coeffs, verbose=0, compact=True, **kwargs):
             # range of cond(S)). cond(mo_coeffs[0])**2 is therefore an
             # exact in-scope substitute for cond(S), not merely a proxy.
             cond_s_equiv = numpy.linalg.cond(mo_coeffs[0]) ** 2
-            _sc.check_ao2mo_permutation_symmetry(eri1, nmo, cond_s_equiv)
+            _eri_ao_max = float(numpy.abs(eri_ao).max()) if numpy.size(eri_ao) else 0.0
+            _sc.check_ao2mo_permutation_symmetry(
+                eri1, nmo, cond_s_equiv,
+                cmax=float(numpy.abs(mo_coeffs[0]).max()), eri_ao_max=_eri_ao_max)
     except Exception:
         pass
 

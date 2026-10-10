@@ -93,7 +93,7 @@ def get_veff(ks, mol=None, dm=None, dm_last=0, vhf_last=0, hermi=1):
             _default_level = _Grids.level
             if _sc.enabled() and ground_state and ks.grids.level >= _default_level:
                 _s = ks.get_ovlp(mol)
-                _sc.check_dft_grid_electron_count(n, dm, _s)
+                _sc.check_dft_grid_electron_count(n, dm, _s, mol=mol, coords=ks.grids.coords)
 
                 # PS-NUMINT-001: eval_rho (density-matrix path, used above via
                 # make_rho/_gen_rho_evaluator) vs eval_rho2 (MO-coefficient
@@ -111,7 +111,10 @@ def get_veff(ks, mol=None, dm=None, dm_last=0, vhf_last=0, hermi=1):
                         _ao = ni.eval_ao(mol, _coords, deriv=0)
                         _rho1 = ni.eval_rho(mol, _ao, dm, xctype='LDA', hermi=1)
                         _rho2 = ni.eval_rho2(mol, _ao, _mo_occ_coeff, _mo_occ_vals, xctype='LDA')
-                        _sc.check_grid_density_representation_consistency(_rho1, _rho2, mol.nao)
+                        _sc.check_grid_density_representation_consistency(
+                            _rho1, _rho2, mol.nao,
+                            cmax=float(numpy.abs(_mo_occ_coeff).max()),
+                            ao_max=float(numpy.abs(_ao).max()))
         except Exception:
             pass
         if ks.do_nlc():

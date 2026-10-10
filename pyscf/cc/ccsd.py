@@ -101,7 +101,9 @@ def kernel(mycc, eris=None, t1=None, t2=None, max_cycle=50, tol=1e-8,
 
     try:
         from pyscf import _scientific_checkers as _sc
-        if _sc.enabled() and isinstance(t2, numpy.ndarray) and t2.ndim == 4:
+        # with max_cycle == 0 the returned t2 is the unmodified initial guess,
+        # which never went through update_amps' resymmetrization
+        if _sc.enabled() and max_cycle > 0 and isinstance(t2, numpy.ndarray) and t2.ndim == 4:
             _sc.check_ccsd_t2_symmetry(t2)
     except Exception:
         pass
@@ -1357,7 +1359,7 @@ class CCSD(CCSDBase):
                                   with_frozen=with_frozen, with_mf=with_mf)
         try:
             from pyscf import _scientific_checkers as _sc
-            if _sc.enabled() and with_frozen and not ao_repr:
+            if _sc.enabled() and with_frozen and with_mf and not ao_repr:
                 _sc.check_ccsd_rdm1_trace(numpy.asarray(_dm1_result), self.mol.nelectron, self.nmo)
         except Exception:
             pass

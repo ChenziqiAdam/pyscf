@@ -89,7 +89,7 @@ def label_orb_symm(mol, irrep_name, symm_orb, mo, s=None,
     try:
         from pyscf import _scientific_checkers as _sc
         if _sc.enabled():
-            _sc.check_orbital_irrep_purity(_proj_total, _mo_norm)
+            _sc.check_orbital_irrep_purity(_proj_total, _mo_norm, cond_s=float(numpy.linalg.cond(s)))
     except Exception:
         pass
 
