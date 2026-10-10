@@ -72,6 +72,31 @@ def trigger_if(condition: bool, checker_id: str, **extra) -> None:
         trigger(checker_id, **extra)
 
 
+def _eps_of(*arrays):
+    """Unit roundoff of the coarsest floating-point array the caller supplied.
+
+    A result computed from reduced-precision input (float32 orbitals, amplitudes
+    or CI vectors) is only defined to that input's roundoff, however the library
+    stores it afterwards. Integers and non-array arguments are ignored.
+    """
+    eps = eps64
+    stack = list(arrays)
+    while stack:
+        a = stack.pop()
+        if a is None:
+            continue
+        if isinstance(a, (list, tuple)):
+            stack.extend(a)
+            continue
+        dt = getattr(a, "dtype", None)
+        try:
+            if dt is not None and np.issubdtype(dt, np.inexact):
+                eps = max(eps, float(np.finfo(dt).eps))
+        except Exception:
+            pass
+    return eps
+
+
 def _within(diff, tol) -> bool:
     return bool(diff <= tol)
 
@@ -130,6 +155,35 @@ def _guard(func):
 # Subsystem 1: scf/hf.py -- restricted Hartree-Fock SCF
 # ---------------------------------------------------------------------------
 
+def solver_overlap(mf, s):
+    """Overlap matrix the SCF eigensolver diagonalised against.
+
+    A symmetry-adapted SCF (hf_symm.eig) solves each irrep block against the
+    block-symmetrised overlap, so a geometry accepted as symmetric within
+    ``symm_geom_tol`` but not symmetrised has orbitals orthonormal in that
+    symmetrised metric rather than in the exact overlap. Any other SCF
+    returns ``s`` unchanged.
+    """
+    try:
+        from pyscf.scf import hf_symm, uhf_symm
+        mol = mf.mol
+        if (isinstance(mf, (hf_symm.SymAdaptedRHF, hf_symm.SymAdaptedROHF, uhf_symm.SymAdaptedUHF))
+                and mol.symmetry and getattr(mol, "symm_orb", None) is not None):
+            blocks = [o.conj().T @ s @ o for o in mol.symm_orb]
+            if getattr(mol, "groupname", None) in ("Dooh", "Coov"):
+                # the second component of a 2D irrep reuses the first one's coefficients
+                for ir, iid in enumerate(mol.irrep_id):
+                    if iid not in (0, 1, 4, 5) and iid % 2 == 1:
+                        blocks[ir] = blocks[ir - 1]
+            s_blk = np.zeros_like(s)
+            for o, b in zip(mol.symm_orb, blocks):
+                s_blk += o @ b @ o.conj().T
+            return s_blk
+    except Exception:
+        pass
+    return s
+
+
 @_guard
 def check_rdm1_idempotency(dm, s):
     """PS-SCF-001: D S D == 2 D for a converged closed-shell RHF density."""
@@ -173,7 +227,8 @@ def check_electron_count_conservation(mol, pop_sum, mo_occ_sum, s=None):
 
 
 @_guard
-def check_dipole_origin_invariance(mol, dip1, dip2, origin1, origin2, dm_trace=None, rmax=None):
+def check_dipole_origin_invariance(mol, dip1, dip2, origin1, origin2, dm_trace=None, rmax=None,
+                                    el_scale=None):
     """PS-SCF-003: neutral-molecule dipole is independent of origin choice.
 
     The electronic term shifts with tr(D S), not with the nuclear charge, so
@@ -198,6 +253,9 @@ def check_dipole_origin_invariance(mol, dip1, dip2, origin1, origin2, dm_trace=N
         n_ref = max(n_ref, abs(float(dm_trace)))
     diff = np.abs(change).max()
     tol = 50.0 * eps64 * n_ref * (shift + (0.0 if rmax is None else float(rmax)))
+    if el_scale is not None:
+        # rounding of the two electronic contractions sum_ij |r_ij||D_ij| (one per origin)
+        tol = max(tol, 50.0 * eps64 * 2.0 * float(el_scale))
     trigger_if(diff > tol, "PS-SCF-003", diff=diff, tol=tol)
 
 
@@ -215,7 +273,7 @@ def check_mo_orthonormality(c, s):
 
 
 @_guard
-def check_canonicalization_density_invariance(dm_before, dm_after, s, nao, mo_occ=None):
+def check_canonicalization_density_invariance(dm_before, dm_after, s, nao, mo_occ=None, src=()):
     """PS-SCF-005: canonicalization must not change the density matrix.
 
     hf.canonicalize diagonalises the Fock matrix inside the doubly occupied,
@@ -231,12 +289,13 @@ def check_canonicalization_density_invariance(dm_before, dm_after, s, nao, mo_oc
             return
     diff = np.abs(dm_before - dm_after).max()
     cond_s = np.linalg.cond(s)
-    tol = 50.0 * eps64 * nao * cond_s
+    # roundoff of the supplied orbitals (src), not of the float64 density rebuilt from them
+    tol = 50.0 * _eps_of(dm_before, dm_after, *src) * nao * cond_s
     trigger_if(diff > tol, "PS-SCF-005", diff=diff, tol=tol)
 
 
 @_guard
-def check_chkfile_restore_electron_count(mol, dm, s, project):
+def check_chkfile_restore_electron_count(mol, dm, s, project, src=()):
     """PS-SCF-006: checkpoint-projected initial guess conserves electron count.
 
     ``s`` is the overlap in which the restored orbitals are normalised: the
@@ -248,7 +307,8 @@ def check_chkfile_restore_electron_count(mol, dm, s, project):
     nao = mol.nao
     # D = C n C^T is stored with rounding eps*max|D|, which tr(D S) inherits
     dmax = max(1.0, float(np.abs(dm).max()))
-    tol = 50.0 * eps64 * nao * dmax if not project else 50.0 * eps64 * nao * 4 * dmax
+    eps = _eps_of(dm, *src)
+    tol = 50.0 * eps * nao * dmax if not project else 50.0 * eps * nao * 4 * dmax
     diff = abs(tr.real - mol.nelectron) if np.iscomplexobj(tr) else abs(tr - mol.nelectron)
     trigger_if(diff > tol, "PS-SCF-006", diff=diff, tol=tol, project=bool(project))
 
@@ -300,7 +360,7 @@ def check_mp2_t2_symmetry(t2, cmax=None):
 
 
 @_guard
-def check_mp2_rdm1_trace(dm1, nelectron, nmo, mo_occ=None):
+def check_mp2_rdm1_trace(dm1, nelectron, nmo, mo_occ=None, src=()):
     """PS-MP2-003: MP2 one-particle density matrix trace == nelectron.
 
     Precondition: the reference carries the molecule's occupations (a mocked
@@ -312,7 +372,7 @@ def check_mp2_rdm1_trace(dm1, nelectron, nmo, mo_occ=None):
     tr = np.trace(dm1)
     diff = abs(tr - nelectron)
     # rounding of the trace is relative to the density magnitude
-    tol = 50.0 * eps64 * nmo * max(1.0, float(np.abs(dm1).max()))
+    tol = 50.0 * _eps_of(dm1, *src) * nmo * max(1.0, float(np.abs(dm1).max()))
     trigger_if(diff > tol, "PS-MP2-003", diff=diff, tol=tol)
 
 
@@ -321,7 +381,7 @@ def check_mp2_rdm1_trace(dm1, nelectron, nmo, mo_occ=None):
 # ---------------------------------------------------------------------------
 
 @_guard
-def check_orbital_irrep_purity(proj_total, mo_norm, cond_s=None):
+def check_orbital_irrep_purity(proj_total, mo_norm, cond_s=None, src=(), s=None, symm_orb=None):
     """PS-SYM-001: the irrep projections of every MO add up to its overlap norm.
 
     label_orb_symm projects each orbital on every irrep of mol.symm_orb with
@@ -343,6 +403,23 @@ def check_orbital_irrep_purity(proj_total, mo_norm, cond_s=None):
     if cond_s is not None:
         # the irrep-block solves lose ~eps*cond of the block overlap (<= cond(S))
         tol = max(tol, 5.0 * eps64 * float(cond_s))
+    if s is not None and symm_orb is not None:
+        # The irrep projections use the block-symmetrised overlap while the norm uses
+        # the exact one; for a geometry accepted as symmetric within symm_geom_tol the
+        # two differ by d = ||S - S_blk||, shifting a normalised orbital's share by
+        # d/lambda_min(S) (1 + d/lambda_min(S)) (first order vanishes for a pure irrep).
+        s64 = np.asarray(s, dtype=float)
+        s_blk = sum(o @ (o.conj().T @ s64 @ o) @ o.conj().T for o in symm_orb)
+        d = float(np.linalg.norm(s64 - s_blk, 2))
+        lam = float(np.linalg.eigvalsh((s64 + s64.T) / 2).min())
+        # allowance only in the symmetry-tolerance regime (a basis that is not a symmetry
+        # decomposition of the AO space shifts the shares by O(1) and must still alarm)
+        if 0 < d <= 1e-4 * max(1.0, float(np.linalg.norm(s64, 2))) and lam > 0:
+            tol += d / lam * (1.0 + d / lam)
+    eps = _eps_of(*src)
+    if eps > eps64:
+        # reduced-precision orbitals/overlap: projections are defined to their roundoff
+        tol = max(tol, 50.0 * eps * max(1.0, float(cond_s or 1.0)))
     trigger_if(worst > tol, "PS-SYM-001", worst_deviation=worst, tol=tol)
 
 
@@ -491,6 +568,41 @@ def _grid_resolves_basis(mol, coords):
     return True
 
 
+def grid_not_coarser_than_default(grids, mol):
+    """True when the integration grid is at least as fine as PySCF's default.
+
+    The quadrature error is a property of the grid, so the electron-count law
+    (tolerance calibrated on the default grid) only applies when the grid in
+    use is no coarser: grids.level not below the default level, every
+    explicitly requested atom_grid (n_rad, n_ang) not below the default for
+    that element, and the default (or no) pruning.
+    """
+    try:
+        from pyscf import gto as _gto
+        from pyscf.dft import gen_grid as gg
+        if grids.level < gg.Grids.level:
+            return False
+        prune = getattr(grids, "prune", None)
+        if prune is not None and prune is not gg.nwchem_prune:
+            return False
+        ag = getattr(grids, "atom_grid", None)
+        if ag:
+            if isinstance(ag, (list, tuple)):
+                ag = {mol.atom_symbol(ia): ag for ia in range(mol.natm)}
+            for ia in range(mol.natm):
+                symb = mol.atom_symbol(ia)
+                if symb in ag:
+                    z = _gto.charge(symb)
+                    n_rad, n_ang = ag[symb]
+                    n_ang = gg.LEBEDEV_ORDER.get(n_ang, n_ang) if n_ang not in gg.LEBEDEV_NGRID else n_ang
+                    if (n_rad < gg._default_rad(z, gg.Grids.level)
+                            or n_ang < gg._default_ang(z, gg.Grids.level)):
+                        return False
+        return True
+    except Exception:
+        return False
+
+
 @_guard
 def check_dft_grid_electron_count(n_grid, dm, s, mol=None, coords=None):
     """PS-DFT-001: grid-quadrature electron count matches trace(D S).
@@ -551,7 +663,7 @@ def check_ccsd_t2_symmetry(t2):
 
 
 @_guard
-def check_ccsd_rdm1_trace(dm1, nelectron, nmo):
+def check_ccsd_rdm1_trace(dm1, nelectron, nmo, src=()):
     """PS-CC-002: CCSD one-particle density matrix (with lambda) trace == nelectron.
 
     Precondition: the full density (with_mf=True); the correlation-only part has
@@ -559,7 +671,7 @@ def check_ccsd_rdm1_trace(dm1, nelectron, nmo):
     """
     tr = np.trace(dm1)
     diff = abs(tr - nelectron)
-    tol = 50.0 * eps64 * nmo
+    tol = 50.0 * _eps_of(dm1, *src) * nmo
     trigger_if(diff > tol, "PS-CC-002", diff=diff, tol=tol)
 
 
@@ -568,7 +680,7 @@ def check_ccsd_rdm1_trace(dm1, nelectron, nmo):
 # ---------------------------------------------------------------------------
 
 @_guard
-def check_grid_density_representation_consistency(rho_from_dm, rho_from_mo, nao, cmax=None, ao_max=None):
+def check_grid_density_representation_consistency(rho_from_dm, rho_from_mo, nao, cmax=None, ao_max=None, src=()):
     """PS-NUMINT-001: eval_rho (density-matrix path) matches eval_rho2 (MO path)."""
     a = np.asarray(rho_from_dm)
     b = np.asarray(rho_from_mo)
@@ -581,7 +693,7 @@ def check_grid_density_representation_consistency(rho_from_dm, rho_from_mo, nao,
     # D = C n C^T is rounded at eps*max|C|^2, weighted by the AO values squared
     if cmax is not None and ao_max is not None:
         scale = max(scale, (float(cmax) * float(ao_max)) ** 2)
-    tol = 50.0 * eps64 * nao * 10 * scale  # worst observed ratio ~1.5e-5/eps64/nao-scale
+    tol = 50.0 * _eps_of(a, b, *src) * nao * 10 * scale  # worst observed ratio ~1.5e-5/eps64/nao-scale
     #                                 headroom set generously since GGA rows sum
     #                                 strictly more contraction terms than LDA.
     trigger_if(diff > tol, "PS-NUMINT-001", diff=diff, tol=tol)
@@ -592,11 +704,11 @@ def check_grid_density_representation_consistency(rho_from_dm, rho_from_mo, nao,
 # ---------------------------------------------------------------------------
 
 @_guard
-def check_localization_density_invariance(dm_before, dm_after, s, nao, n_iter):
+def check_localization_density_invariance(dm_before, dm_after, s, nao, n_iter, src=()):
     """PS-LO-001: Boys/Edmiston/Pipek localization preserves the density matrix."""
     diff = np.abs(dm_before - dm_after).max()
     cond_s = np.linalg.cond(s)
-    tol = 50.0 * eps64 * nao * cond_s * max(1, n_iter)
+    tol = 50.0 * _eps_of(dm_before, dm_after, *src) * nao * cond_s * max(1, n_iter)
     trigger_if(diff > tol, "PS-LO-001", diff=diff, tol=tol)
 
 
@@ -626,7 +738,7 @@ def check_analytic_vs_finite_difference_gradient(analytic, finite_diff):
 # ---------------------------------------------------------------------------
 
 @_guard
-def check_fci_rdm1_trace(dm1a, dm1b, neleca, nelecb, norb, norm2=1.0, ndet=None):
+def check_fci_rdm1_trace(dm1a, dm1b, neleca, nelecb, norb, norm2=1.0, ndet=None, civec_dtype=None):
     """PS-FCI-001: FCI spin-separated RDM traces equal neleca/nelecb.
 
     make_rdm1s's compiled string-excitation contraction kernel never
@@ -642,6 +754,10 @@ def check_fci_rdm1_trace(dm1a, dm1b, neleca, nelecb, norb, norm2=1.0, ndet=None)
     # The unnormalized-vector RDM carries the factor <c|c>; the electron-count
     # law is stated for the normalized state.
     if not np.isfinite(norm2) or norm2 <= 0:
+        return
+    # Precondition: float64 CI vector, the only dtype the compiled kernel (and
+    # direct_spin1.energy) accepts; other dtypes are read as raw float64 memory.
+    if civec_dtype is not None and np.dtype(civec_dtype) != np.float64:
         return
     tr_a = np.trace(np.asarray(dm1a)) / norm2
     tr_b = np.trace(np.asarray(dm1b)) / norm2
@@ -706,7 +822,7 @@ def check_fci_energy_eigenvalue_consistency(h1e, eri, fcivec, norb, nelec, ecore
 # ---------------------------------------------------------------------------
 
 @_guard
-def check_cisd_rdm1_trace(dm1, nelectron, nmo, mo_occ=None):
+def check_cisd_rdm1_trace(dm1, nelectron, nmo, mo_occ=None, src=()):
     """PS-CISD-001: CISD one-particle density matrix trace == nelectron.
 
     Precondition: the reference carries the molecule's occupations (a mocked
@@ -727,7 +843,7 @@ def check_cisd_rdm1_trace(dm1, nelectron, nmo, mo_occ=None):
         return
     tr = np.trace(dm1)
     diff = abs(tr - nelectron)
-    tol = 50.0 * eps64 * nmo
+    tol = 50.0 * _eps_of(dm1, *src) * nmo
     trigger_if(diff > tol, "PS-CISD-001", diff=diff, tol=tol)
 
 
@@ -761,7 +877,7 @@ def check_casci_electron_count(casdm1, nelecas, ndet=None):
 
 @_guard
 def check_casscf_canonicalization_density_invariance(dm_before, dm_after, s, nao,
-                                                     casdm1=None, cas_natorb=False, mo_coeff=None):
+                                                     casdm1=None, cas_natorb=False, mo_coeff=None, src=()):
     """PS-MCSCF-002: total (core+active) density matrix unchanged by canonicalize().
 
     Unlike a single orbital rotation at fixed occupation (PS-SCF-005/
@@ -777,7 +893,7 @@ def check_casscf_canonicalization_density_invariance(dm_before, dm_after, s, nao
     """
     diff = np.abs(dm_before - dm_after).max()
     cond_s = np.linalg.cond(s)
-    tol = 50.0 * eps64 * nao * cond_s
+    tol = 50.0 * _eps_of(dm_before, dm_after, mo_coeff, *src) * nao * cond_s
     if cas_natorb and casdm1 is not None:
         # cas_natorb deliberately folds active natural orbitals whose occupation
         # is within FRAC_OCC_THRESHOLD of 0 or 2 into the core/virtual space
@@ -793,7 +909,8 @@ def check_casscf_canonicalization_density_invariance(dm_before, dm_after, s, nao
 
 
 @_guard
-def check_natural_orbital_occupation_conservation(noons, nelectron, s, scf_level, dm_max=None):
+def check_natural_orbital_occupation_conservation(noons, nelectron, s, scf_level, dm_max=None, src=(),
+                                                  s_solver=None, dm_norm=None):
     """PS-MCSCF-003: sum(NOONs) == nelectron; each NOON in [0,2] for SCF-level refs.
 
     A third, structurally distinct computational route to the electron
@@ -807,7 +924,7 @@ def check_natural_orbital_occupation_conservation(noons, nelectron, s, scf_level
     """
     noons = np.asarray(noons)
     cond_s = np.linalg.cond(s)
-    tol = 50.0 * eps64 * cond_s
+    tol = 50.0 * _eps_of(noons, *src) * cond_s
     # S D S is formed and diagonalised against S, so rounding follows the
     # density magnitude (|D| ~ sqrt(cond(S)) for nearly redundant bases)
     dscale = 1.0 if dm_max is None else max(1.0, float(dm_max))
@@ -819,8 +936,14 @@ def check_natural_orbital_occupation_conservation(noons, nelectron, s, scf_level
     trigger_if(diff > tol_sum, "PS-MCSCF-003", family="sum", diff=diff, tol=tol_sum)
     if scf_level:
         bound_violation = max(-noons.min(), noons.max() - 2.0)
-        trigger_if(bound_violation > tol, "PS-MCSCF-003",
-                   family="bound", violation=bound_violation, tol=tol)
+        tol_bound = tol
+        if s_solver is not None and dm_norm is not None:
+            # SCF orbitals are idempotent in the overlap the eigensolver used (the
+            # block-symmetrised one for a symmetry-adapted SCF); against the exact
+            # overlap the largest occupation can exceed 2 by ||D|| ||S - S_solver||
+            tol_bound += float(dm_norm) * float(np.linalg.norm(np.asarray(s) - np.asarray(s_solver), 2))
+        trigger_if(bound_violation > tol_bound, "PS-MCSCF-003",
+                   family="bound", violation=bound_violation, tol=tol_bound)
 
 
 # ---------------------------------------------------------------------------
@@ -933,7 +1056,8 @@ def check_pbc_reciprocal_lattice_duality(a, b, norm_to):
 
 
 @_guard
-def check_pbc_ewald_algorithm_consistency(e_direct, e_pme, ew_eta=None, ew_cut=None, precision=None):
+def check_pbc_ewald_algorithm_consistency(e_direct, e_pme, ew_eta=None, ew_cut=None, precision=None,
+                                           charge_sq=None):
     """PS-PBC-003: direct-summation and particle-mesh Ewald energies agree.
 
     Two structurally different reciprocal-space routines (a direct Gv-grid
@@ -962,7 +1086,13 @@ def check_pbc_ewald_algorithm_consistency(e_direct, e_pme, ew_eta=None, ew_cut=N
         if erfc(float(ew_eta) * float(ew_cut)) > 1e-7:
             return
     diff = abs(e_direct - e_pme)
-    tol = 1e-6 * max(abs(e_direct), 1e-8)
+    # The terms of the lattice sum are of order eta/sqrt(pi) * sum(Z^2) (the self
+    # term); PME's discretisation error is relative to that scale, not to a net
+    # energy that cancels towards zero.
+    scale = abs(e_direct)
+    if ew_eta is not None and charge_sq is not None:
+        scale = max(scale, float(ew_eta) / np.sqrt(np.pi) * float(charge_sq))
+    tol = 1e-6 * max(scale, 1e-8)
     trigger_if(diff > tol, "PS-PBC-003", diff=diff, tol=tol)
 
 

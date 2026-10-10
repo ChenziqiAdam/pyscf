@@ -1360,7 +1360,8 @@ class CCSD(CCSDBase):
         try:
             from pyscf import _scientific_checkers as _sc
             if _sc.enabled() and with_frozen and with_mf and not ao_repr:
-                _sc.check_ccsd_rdm1_trace(numpy.asarray(_dm1_result), self.mol.nelectron, self.nmo)
+                _sc.check_ccsd_rdm1_trace(numpy.asarray(_dm1_result), self.mol.nelectron, self.nmo,
+                                          src=(t1, t2, l1, l2))
         except Exception:
             pass
         return _dm1_result

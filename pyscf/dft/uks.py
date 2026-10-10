@@ -58,10 +58,8 @@ def get_veff(ks, mol=None, dm=None, dm_last=0, vhf_last=0, hermi=1):
             # (same tolerance-calibration argument applies to the
             # per-spin-channel version). See repo-root PROGRESS.md,
             # PS-DFT-001 fix.
-            from pyscf.dft.gen_grid import Grids as _Grids
-            _default_level = _Grids.level
             if (_sc.enabled() and ground_state and numpy.ndim(n) == 1 and len(n) == 2
-                    and ks.grids.level >= _default_level):
+                    and _sc.grid_not_coarser_than_default(ks.grids, mol)):
                 _s = ks.get_ovlp(mol)
                 _sc.check_uks_grid_electron_count(n, dm, _s, mol=mol, coords=ks.grids.coords)
         except Exception:

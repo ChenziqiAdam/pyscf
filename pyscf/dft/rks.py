@@ -89,9 +89,9 @@ def get_veff(ks, mol=None, dm=None, dm_last=0, vhf_last=0, hermi=1):
             # library's own current default rather than a hardcoded "3", so
             # this stays correct if the default is ever changed upstream.
             # See repo-root PROGRESS.md, PS-DFT-001 fix.
-            from pyscf.dft.gen_grid import Grids as _Grids
-            _default_level = _Grids.level
-            if _sc.enabled() and ground_state and ks.grids.level >= _default_level:
+            # The gate follows the grid actually in use: level, any explicit
+            # atom_grid and pruning must all be at least the default's.
+            if _sc.enabled() and ground_state and _sc.grid_not_coarser_than_default(ks.grids, mol):
                 _s = ks.get_ovlp(mol)
                 _sc.check_dft_grid_electron_count(n, dm, _s, mol=mol, coords=ks.grids.coords)
 
@@ -114,7 +114,8 @@ def get_veff(ks, mol=None, dm=None, dm_last=0, vhf_last=0, hermi=1):
                         _sc.check_grid_density_representation_consistency(
                             _rho1, _rho2, mol.nao,
                             cmax=float(numpy.abs(_mo_occ_coeff).max()),
-                            ao_max=float(numpy.abs(_ao).max()))
+                            ao_max=float(numpy.abs(_ao).max()),
+                            src=(_mo_occ_coeff, _mo_occ_vals))
         except Exception:
             pass
         if ks.do_nlc():

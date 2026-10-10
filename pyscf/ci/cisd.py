@@ -581,7 +581,7 @@ def make_rdm1(myci, civec=None, nmo=None, nocc=None, ao_repr=False):
         from pyscf import _scientific_checkers as _sc
         if _sc.enabled() and not ao_repr:
             _sc.check_cisd_rdm1_trace(dm1, myci.mol.nelectron, nmo,
-                                     getattr(myci, 'mo_occ', None))
+                                     getattr(myci, 'mo_occ', None), src=(civec,))
     except Exception:
         pass
     return dm1

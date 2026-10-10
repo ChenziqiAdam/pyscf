@@ -241,9 +241,12 @@ Keyword argument "init_dm" is replaced by "dm0"''')
     try:
         from pyscf import _scientific_checkers as _sc
         if _sc.enabled() and scf_conv and mo_coeff is not None and mo_coeff.ndim == 2:
-            _sc.check_mo_orthonormality(mo_coeff, s1e)
+            # orbitals are orthonormal in the overlap the eigensolver used, which for a
+            # symmetry-adapted SCF is the block-symmetrised overlap
+            _s_solver = _sc.solver_overlap(mf, s1e)
+            _sc.check_mo_orthonormality(mo_coeff, _s_solver)
             if numpy.allclose(mo_occ, mo_occ.astype(int)) and set(numpy.unique(mo_occ)) <= {0.0, 2.0}:
-                _sc.check_rdm1_idempotency(dm, s1e)
+                _sc.check_rdm1_idempotency(dm, _s_solver)
             _pop = numpy.einsum('ij,ji->i', dm, s1e).real
             # AtomSphAverageRHF's average-of-configuration atomic guess
             # (init_guess='atom'/'huckel') reuses this same kernel() for its
@@ -777,7 +780,8 @@ def init_guess_by_chkfile(mol, chkfile_name, project=None):
                 # project=False reuses the stored orbitals, normalised in the
                 # checkpoint molecule's overlap; project=True renormalises in mol's
                 _s_check = get_ovlp(mol if project else chk_mol)
-                _sc.check_chkfile_restore_electron_count(mol, numpy.asarray(dm), _s_check, project)
+                _sc.check_chkfile_restore_electron_count(mol, numpy.asarray(dm), _s_check, project,
+                                                         src=(mo,))
     except Exception:
         pass
 
@@ -1430,7 +1434,7 @@ def canonicalize(mf, mo_coeff, mo_occ, fock=None):
             _dm_after = mf.make_rdm1(mo, mo_occ)
             _sc.check_canonicalization_density_invariance(
                 numpy.asarray(_dm_before), numpy.asarray(_dm_after), _s, mo_coeff.shape[0],
-                mo_occ=mo_occ)
+                mo_occ=mo_occ, src=(mo_coeff, mo))
     except Exception:
         pass
 
@@ -1499,8 +1503,14 @@ def dip_moment(mol, dm, unit='Debye', origin=None, verbose=logger.NOTE, **kwargs
                 # not happened yet at this point in the function).
                 _dm_trace = float(numpy.einsum(
                     'ij,ji', mol.intor_symmetric('int1e_ovlp'), dm).real)
+                # rounding of the electronic term: sum_ij |r_ij||D_ij| (plus the S-weighted
+                # origin shift), which exceeds N*rmax when D has large cancelling entries
+                _abs_dm = numpy.abs(dm)
+                _el_scale = float(numpy.einsum('xij,ji->x', numpy.abs(ao_dip), _abs_dm).max()
+                                  + 0.37 * numpy.einsum('ij,ji', numpy.abs(
+                                      mol.intor_symmetric('int1e_ovlp')), _abs_dm))
                 _sc.check_dipole_origin_invariance(mol, mol_dip, _dip2, origin, _shift,
-                                                   dm_trace=_dm_trace,
+                                                   dm_trace=_dm_trace, el_scale=_el_scale,
                                                    rmax=float(numpy.abs(coords - origin[None, :]).max()))
         except Exception:
             pass

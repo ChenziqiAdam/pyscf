@@ -4,12 +4,12 @@
   "note": "Complete public scientific-checker bank. Inactive unless SCIBENCH_TRIGGER_LOG is set.",
   "checkers": [
     {
-      "alarm": "max(abs(D@S@D - 2*D)) exceeds 50*eps64*max(nao*cond(S), max|D|**2)",
+      "alarm": "max(abs(D@S_solver@D - 2*D)) exceeds 50*eps64*max(nao*cond(S_solver), max|D|**2)",
       "family": "rdm1_idempotency",
       "id": "PS-SCF-001",
       "invariant": "D S D == 2 D for the converged density matrix",
       "observation_point": "at kernel()'s return, once scf_conv is True and mo_occ is confirmed closed-shell",
-      "precondition": "any converged closed-shell RHF calculation (mo_occ in {0,2} only), any molecule/basis",
+      "precondition": "any converged closed-shell RHF calculation (mo_occ in {0,2} only), any molecule/basis For a symmetry-adapted SCF (hf_symm/uhf_symm classes) the overlap in the law is the block-symmetrised S_blk = sum_ir O_ir (O_ir^T S O_ir) O_ir^T (the metric hf_symm.eig solves against); this differs from the exact overlap when the geometry is accepted as symmetric within symm_geom_tol without being symmetrised. Otherwise S.",
       "rationale": "idempotency under the AO metric is the defining algebraic signature of a valid single-determinant wavefunction; a bug in threading mo_coeff/mo_occ from the eigensolver into make_rdm1 would break this silently",
       "scientific_quantity": "one-particle density matrix of a closed-shell RHF wavefunction",
       "source": "pyscf/scf/hf.py",
@@ -28,7 +28,7 @@
       "symbol": "kernel (observation point)"
     },
     {
-      "alarm": "max(abs(dip1_au - dip2_au)) of the trace-corrected difference exceeds 50*eps64*nelectron*(shift + rmax), rmax = largest coordinate of any atom relative to either origin; n_ref = max(nelectron, |tr(DS)|)",
+      "alarm": "max(abs(dip1_au - dip2_au)) of the trace-corrected difference exceeds max(50*eps64*nelectron*(shift + rmax), 100*eps64*E), E = max over x of sum_ij |<i|r_x|j>||D_ji| + shift*sum_ij |S_ij||D_ji| (the absolute magnitude of the two electronic contractions); rmax = largest coordinate of any atom relative to either origin; n_ref = max(nelectron, |tr(DS)|)",
       "family": "dipole_origin_invariance",
       "id": "PS-SCF-003",
       "invariant": "dip_moment(mol, dm, origin=o1) == dip_moment(mol, dm, origin=o2) for any o1 != o2 (2026-10-09: for a density with tr(D S) != nelectron the exact shift (tr(D S)-nelectron)*(o2-o1) is subtracted before comparing; for an N-electron density this is the unchanged law)",
@@ -40,19 +40,19 @@
       "symbol": "dip_moment"
     },
     {
-      "alarm": "max(abs(C^dagger S C - I)) exceeds 50*eps64*cond(S)",
+      "alarm": "max(abs(C^dagger S_solver C - I)) exceeds 50*eps64*cond(S_solver)",
       "family": "mo_orthonormality",
       "id": "PS-SCF-004",
       "invariant": "C^dagger S C == I for the converged mo_coeff",
       "observation_point": "at kernel()'s return, for any 2D (RHF-shaped) mo_coeff",
-      "precondition": "any converged SCF calculation, any molecule/basis (including near-singular S)",
+      "precondition": "any converged SCF calculation, any molecule/basis (including near-singular S) For a symmetry-adapted SCF the overlap in the law is the block-symmetrised S_solver (see PS-SCF-001); otherwise S.",
       "rationale": "PySCF never itself re-verifies scipy.linalg.eigh(h,s)'s orthonormality contract before handing mo_coeff to every downstream consumer (make_rdm1, get_grad, canonicalize, population analysis)",
       "scientific_quantity": "molecular orbitals from the Roothaan-Hall generalized eigenproblem",
       "source": "pyscf/scf/hf.py",
       "symbol": "kernel (observation point; eig() computes the raw eigensolver output)"
     },
     {
-      "alarm": "max(abs(D_before - D_after)) exceeds 50*eps64*nao*cond(S)",
+      "alarm": "max(abs(D_before - D_after)) exceeds 50*eps_in*nao*cond(S), eps_in = unit roundoff of the coarsest dtype among the input orbitals and the densities (eps64 for float64 orbitals)",
       "family": "canonicalization_density_invariance",
       "id": "PS-SCF-005",
       "invariant": "make_rdm1(canonicalize(mo_coeff,mo_occ)[1], mo_occ) == make_rdm1(mo_coeff, mo_occ)",
@@ -64,7 +64,7 @@
       "symbol": "canonicalize"
     },
     {
-      "alarm": "abs(trace(dm s) - nelectron) exceeds 50*eps64*nao*max(1,max|D|) (project=False) or 50*eps64*nao*4*max(1,max|D|) (project=True)",
+      "alarm": "abs(trace(dm s) - nelectron) exceeds 50*eps_in*nao*max(1,max|D|) (project=False) or 50*eps_in*nao*4*max(1,max|D|) (project=True), eps_in = unit roundoff of the coarsest dtype among the density matrix and the stored orbitals (eps64 for float64 storage)",
       "family": "chkfile_projection_electron_count",
       "id": "PS-SCF-006",
       "invariant": "trace(dm @ get_ovlp(mol)) == mol.nelectron (2026-10-09: S is the target mol's overlap for project=True and the checkpoint molecule's overlap for project=False, the metric in which the reused orbitals are normalised)",
@@ -100,7 +100,7 @@
       "symbol": "kernel"
     },
     {
-      "alarm": "abs(trace(dm1) - nelectron) exceeds 50*eps64*nmo (2026-10-09: tolerance 50*eps64*nmo*max(1,max|dm1|))",
+      "alarm": "abs(trace(dm1) - nelectron) exceeds 50*eps64*nmo (2026-10-09: tolerance 50*eps_in*nmo*max(1,max|dm1|), eps_in = unit roundoff of the coarsest dtype among dm1 and t2 (eps64 for float64 amplitudes))",
       "family": "mp2_rdm1_trace_conservation",
       "id": "PS-MP2-003",
       "invariant": "trace(dm1) == mol.nelectron",
@@ -112,7 +112,7 @@
       "symbol": "make_rdm1"
     },
     {
-      "alarm": "max over MOs of |sum_irrep projection - <mo|S|mo>| / <mo|S|mo> exceeds max(1e-12, 5*eps64*cond(S))",
+      "alarm": "max over MOs of |sum_irrep projection - <mo|S|mo>| / <mo|S|mo> exceeds max(1e-12, 5*eps64*cond(S), 50*eps_in*cond(S) for reduced-precision input, A), eps_in = unit roundoff of the coarsest dtype among the orbitals and the overlap, A = d/lambda_min(S)*(1 + d/lambda_min(S)) with d = ||S - S_blk||_2 when 0 < d <= 1e-4*max(1,||S||_2) and 0 otherwise, S_blk = sum_ir O_ir (O_ir^T S O_ir) O_ir^T the block-symmetrised overlap",
       "family": "symm_orb_completeness",
       "id": "PS-SYM-001",
       "invariant": "sum_irrep <mo|P_irrep|mo>_S == <mo|mo>_S for every MO (mol.symm_orb is a complete orthonormal symmetry-adapted basis of the AO space)",
@@ -153,7 +153,7 @@
       "id": "PS-DFT-001",
       "invariant": "n (grid-integrated electron count) is close to trace(dm @ S)",
       "observation_point": "inside get_veff(), immediately after ni.nr_rks returns n, gated on grids.level >= default",
-      "precondition": "RKS/UKS with any XC functional, hermi != 2, ground-state (2D) density matrix, grids.level >= the library's current default level (compared dynamically against pyscf.dft.gen_grid.Grids.level), and a grid that resolves the basis: every primitive exponent a satisfies 3/rmax**2 <= a <= 1e4*max(Z-1,1) (rmax: largest grid distance from the atom, Z: nuclear charge)",
+      "precondition": "RKS/UKS with any XC functional, hermi != 2, ground-state (2D) density matrix, the grid in use is no coarser than the default: grids.level >= the library's current default level (compared dynamically against pyscf.dft.gen_grid.Grids.level), every explicit atom_grid entry (n_rad, n_ang) is at least the default for that element at that level, and pruning is the default (nwchem_prune) or none, and a grid that resolves the basis: every primitive exponent a satisfies 3/rmax**2 <= a <= 1e4*max(Z-1,1) (rmax: largest grid distance from the atom, Z: nuclear charge)",
       "rationale": "PySCF's own debug log already frames n as 'nelec by numeric integration' implying an expected reference value, but nothing in the code path actually validates it against the analytic trace; a violation beyond grid-quadrature error would indicate a real bug in grid construction/pruning or eval_rho's density evaluation",
       "scientific_quantity": "electron count of a density matrix via real-space grid quadrature vs. analytic AO-metric trace",
       "source": "pyscf/dft/rks.py",
@@ -165,7 +165,7 @@
       "id": "PS-UKS-001",
       "invariant": "n[0] close to trace(dm[0] S) and n[1] close to trace(dm[1] S), checked independently per channel",
       "observation_point": "inside get_veff(), immediately after ni.nr_uks returns n, before the NLC branch (if any) reassigns n",
-      "precondition": "same as PS-DFT-001 (including the basis-resolution window), specialized to a genuine 2-component (dm.ndim==3, dm.shape[0]==2) unrestricted density, gated on the non-NLC-branch n being a length-2 tuple",
+      "precondition": "same as PS-DFT-001 (including the basis-resolution window), specialized to a genuine 2-component (dm.ndim==3, dm.shape[0]==2) unrestricted density, gated on the non-NLC-branch n being a length-2 tuple The grid-coarseness gate is the one of PS-DFT-001 (level, explicit atom_grid and pruning no coarser than the default).",
       "rationale": "checking each spin channel independently (not just their sum) is necessary to catch a channel-swap or one-sided misattribution bug that a combined check would miss",
       "scientific_quantity": "per-spin-channel electron count of an unrestricted density via grid quadrature vs. analytic trace",
       "source": "pyscf/dft/uks.py",
@@ -184,7 +184,7 @@
       "symbol": "kernel"
     },
     {
-      "alarm": "abs(trace(dm1) - nelectron) exceeds 50*eps64*nmo",
+      "alarm": "abs(trace(dm1) - nelectron) exceeds 50*eps_in*nmo, eps_in = unit roundoff of the coarsest dtype among dm1 and t1, t2, l1, l2 (eps64 for float64 amplitudes)",
       "family": "ccsd_rdm1_trace_conservation",
       "id": "PS-CC-002",
       "invariant": "trace(dm1) == mol.nelectron",
@@ -196,7 +196,7 @@
       "symbol": "CCSD.make_rdm1"
     },
     {
-      "alarm": "max(abs(rho_from_dm - rho_from_mo)) exceeds 50*eps64*nao*10*max(1, max|rho|, (max|C_occ|*max|ao|)**2)",
+      "alarm": "max(abs(rho_from_dm - rho_from_mo)) exceeds 50*eps_in*nao*10*max(1, max|rho|, (max|C_occ|*max|ao|)**2)",
       "family": "grid_density_representation_consistency",
       "id": "PS-NUMINT-001",
       "invariant": "eval_rho(mol, ao, dm) == eval_rho2(mol, ao, mo_coeff_occ, mo_occ_occ) on the same grid batch",
@@ -208,7 +208,7 @@
       "symbol": "eval_rho / eval_rho2 (cross-checked from pyscf/dft/rks.py get_veff)"
     },
     {
-      "alarm": "max(abs(D_before - D_after)) exceeds 50*eps64*nao*cond(S)*max(1,n_macro_iterations)",
+      "alarm": "max(abs(D_before - D_after)) exceeds 50*eps_in*nao*cond(S)*max(1,n_macro_iterations), eps_in = unit roundoff of the coarsest dtype among the input orbitals and the density matrices (eps64 for float64 orbitals)",
       "family": "localization_density_invariance",
       "id": "PS-LO-001",
       "invariant": "the occupied-subspace density matrix is unchanged by localization",
@@ -237,7 +237,7 @@
       "id": "PS-FCI-001",
       "invariant": "trace(dm1a) == neleca and trace(dm1b) == nelecb",
       "observation_point": "at make_rdm1s()'s return, on the module-level function (catches all solver variants that call it, not just the FCISolver.make_rdm1s method wrapper)",
-      "precondition": "any FCI vector from direct_spin1/direct_spin0/direct_uhf/direct_spin1_symm/direct_spin0_symm (including the non-Hermitian direct_nosym solver and selected-CI's truncated determinant space, both of which the trace law still covers), any norb, any (neleca, nelecb) with 0<=neleca,nelecb<=norb -- excluding direct_ep.py's electron-phonon-coupled vectors (a different mode/electron indexing convention not confirmed to share this law) The identity is stated for the normalized state: the trace is divided by <c|c>.",
+      "precondition": "any FCI vector from direct_spin1/direct_spin0/direct_uhf/direct_spin1_symm/direct_spin0_symm (including the non-Hermitian direct_nosym solver and selected-CI's truncated determinant space, both of which the trace law still covers), any norb, any (neleca, nelecb) with 0<=neleca,nelecb<=norb -- excluding direct_ep.py's electron-phonon-coupled vectors (a different mode/electron indexing convention not confirmed to share this law) The identity is stated for the normalized state: the trace is divided by <c|c>. The CI vector is float64, the only dtype the compiled kernel and direct_spin1.energy accept; other dtypes are read as raw float64 memory and are outside the law.",
       "rationale": "the RDM trace is produced entirely by the compiled libfci string-excitation contraction kernel, a code path that never references the caller-supplied nelec integers in computing matrix elements -- an independently implemented path from the values it must agree with, the FCI-tier analogue of the shipped PS-SCF-002/PS-UHF-002/PS-MP2-003/PS-CC-002 electron-count/RDM-trace family",
       "scientific_quantity": "FCI one-particle reduced density matrix (spin-separated)",
       "source": "pyscf/fci/direct_spin1.py",
@@ -256,7 +256,7 @@
       "symbol": "FCISolver.kernel"
     },
     {
-      "alarm": "abs(trace(dm1) - nelectron) exceeds 50*eps64*nmo",
+      "alarm": "abs(trace(dm1) - nelectron) exceeds 50*eps_in*nmo, eps_in = unit roundoff of the coarsest dtype among dm1 and the CI vector (eps64 for float64)",
       "family": "cisd_rdm1_trace_conservation",
       "id": "PS-CISD-001",
       "invariant": "trace(dm1) == mol.nelectron",
@@ -280,7 +280,7 @@
       "symbol": "kernel"
     },
     {
-      "alarm": "max(abs(D_before - D_after)) exceeds 50*eps64*nao*cond(S) (2026-10-09: when cas_natorb=True the tolerance is increased by 2*sum(deviation of folded occupations)*max(1,max|C|^2))",
+      "alarm": "max(abs(D_before - D_after)) exceeds 50*eps_in*nao*cond(S), eps_in = unit roundoff of the coarsest dtype among the input orbitals, the CI vector and the densities (eps64 for float64) (2026-10-09: when cas_natorb=True the tolerance is increased by 2*sum(deviation of folded occupations)*max(1,max|C|^2))",
       "family": "casscf_canonicalization_density_invariance",
       "id": "PS-MCSCF-002",
       "invariant": "total density matrix (2*mocore@mocore.T + mocas@casdm1@mocas.T) is unchanged by canonicalize()",
@@ -292,7 +292,7 @@
       "symbol": "canonicalize"
     },
     {
-      "alarm": "abs(sum(noons) - nelectron) exceeds 50*eps64*cond(S)*max(1,nelectron)*max(1,max|noons|)*max(1,max|D|) (sum half, any method); max(-noons.min(), noons.max()-2) exceeds 50*eps64*cond(S)*max(1,max|D|) (bound half, SCF-level only)",
+      "alarm": "abs(sum(noons) - nelectron) exceeds 50*eps_in*cond(S)*max(1,nelectron)*max(1,max|noons|)*max(1,max|D|) (sum half, any method); max(-noons.min(), noons.max()-2) exceeds 50*eps_in*cond(S)*max(1,max|D|) + ||D||_2*||S - S_solver||_2 (bound half, SCF-level only)",
       "family": "natural_orbital_occupation_conservation",
       "id": "PS-MCSCF-003",
       "invariant": "sum(noons) == mol.nelectron (any method); each noon in [0,2] (SCF-level references only)",
@@ -340,7 +340,7 @@
       "symbol": "Cell.reciprocal_vectors"
     },
     {
-      "alarm": "abs(e_direct - e_pme) exceeds 1e-6*max(abs(e_direct), 1e-8)",
+      "alarm": "abs(e_direct - e_pme) exceeds 1e-6*max(abs(e_direct), eta/sqrt(pi)*sum(Z^2), 1e-8), eta = Ewald exponent, Z = atomic charges of the cell",
       "family": "pbc_ewald_algorithm_consistency",
       "id": "PS-PBC-003",
       "invariant": "Cell.ewald()'s direct real+reciprocal-space summation agrees with particle_mesh_ewald()'s FFT/B-spline approximation, within PME's own interpolation/grid discretization error",

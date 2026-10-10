@@ -731,8 +731,9 @@ def ewald(cell, ew_eta=None, ew_cut=None):
                 e_direct = _ewald_direct_sum(cell, ew_eta, ew_cut)
                 _eta, _cut = ((ew_eta, ew_cut) if ew_eta is not None and ew_cut is not None
                               else cell.get_ewald_params())
-                _sc.check_pbc_ewald_algorithm_consistency(e_direct, e_pme, _eta, _cut,
-                                                          precision=cell.precision)
+                _sc.check_pbc_ewald_algorithm_consistency(
+                    e_direct, e_pme, _eta, _cut, precision=cell.precision,
+                    charge_sq=float(np.sum(np.asarray(cell.atom_charges(), dtype=float) ** 2)))
         except Exception:
             pass
         return e_pme

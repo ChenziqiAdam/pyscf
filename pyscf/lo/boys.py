@@ -109,7 +109,8 @@ def kernel(localizer, mo_coeff=None, callback=None, verbose=None):
             _dm_before = 2.0 * _orig_mo_coeff @ _orig_mo_coeff.conj().T
             _dm_after = 2.0 * localizer.mo_coeff @ localizer.mo_coeff.conj().T
             _sc.check_localization_density_invariance(
-                _dm_before, _dm_after, _s, _orig_mo_coeff.shape[0], imacro + 1)
+                _dm_before, _dm_after, _s, _orig_mo_coeff.shape[0], imacro + 1,
+                src=(_orig_mo_coeff,))
     except Exception:
         pass
 
