@@ -329,7 +329,8 @@ def get_occ(mf, mo_energy=None, mo_coeff=None):
                 and numpy.allclose(mo_occ[1], numpy.round(mo_occ[1]))
                 and (mf.nelec is None or tuple(mf.nelec) == tuple(mf.mol.nelec))):
             _sc.check_uhf_electron_count_conservation(
-                int(mo_occ[0].sum()), int(mo_occ[1].sum()), mf.mol.nelectron, mf.mol.spin)
+                int(mo_occ[0].sum()), int(mo_occ[1].sum()), mf.mol.nelectron, mf.mol.spin,
+                nmo=mo_energy[0].size)
     except Exception:
         pass
 

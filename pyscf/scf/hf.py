@@ -266,8 +266,11 @@ Keyword argument "init_dm" is replaced by "dm0"''')
                            else float(numpy.sum(mo_occ)))
             # fixed-chemical-potential smearing (smearing(mu0=...)) is grand
             # canonical: the particle number is sum(mo_occ), not mol.nelectron
+            # AtomSphAverageRHF occupies its element's (neutral) atomic
+            # configuration whatever mol.charge says: its particle number is sum(mo_occ)
             _n_target = (float(numpy.sum(mo_occ))
-                         if getattr(mf, 'mu0', None) is not None else None)
+                         if getattr(mf, 'mu0', None) is not None
+                         or type(mf).__name__ in ('AtomSphAverageRHF', 'AtomHF1e') else None)
             _sc.check_electron_count_conservation(
                 mol, float(_pop.sum()), _mo_occ_sum, s1e, n_target=_n_target)
     except Exception:

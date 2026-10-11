@@ -365,6 +365,10 @@ def make_natural_orbitals (method_obj):
             # grand-canonical smearing (fixed mu0): particle number is tr(D S)
             _n_target = (float(numpy.trace(Dm @ S).real)
                          if getattr(mf, 'mu0', None) is not None else None)
+            # spherically averaged atomic HF: particle number = its configuration's sum(mo_occ)
+            if (_n_target is None and method_obj is mf
+                    and type(mf).__name__ in ('AtomSphAverageRHF', 'AtomHF1e')):
+                _n_target = float(numpy.sum(mf.mo_occ))
             _sc.check_natural_orbital_occupation_conservation(
                 noons, mf.mol.nelectron, S, _scf_level, dm_max=float(numpy.abs(Dm).max()),
                 s_solver=_sc.solver_overlap(mf, S), dm_norm=float(numpy.linalg.norm(Dm, 2)),

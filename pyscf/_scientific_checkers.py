@@ -293,6 +293,13 @@ def check_dipole_origin_invariance(mol, dip1, dip2, origin1, origin2, dm_trace=N
     if el_scale is not None:
         # rounding of the two electronic contractions sum_ij |r_ij||D_ij| (one per origin)
         tol = max(tol, 50.0 * eps64 * 2.0 * float(el_scale))
+        # the integral kernel accumulates nprim^2 primitive pairs per shell
+        # pair; its rounding grows ~eps*nprim (measured <= 4*eps*nprim*el_scale)
+        try:
+            nprim = max([int(mol.bas_nprim(ib)) for ib in range(mol.nbas)] or [1])
+        except Exception:
+            nprim = 1
+        tol = max(tol, 50.0 * eps64 * nprim * float(el_scale))
     trigger_if(diff > tol, "PS-SCF-003", diff=diff, tol=tol)
 
 
@@ -499,8 +506,18 @@ def check_orbital_irrep_purity(proj_total, mo_norm, cond_s=None, src=(), s=None,
 
 
 @_guard
-def check_uhf_electron_count_conservation(mo_occ_a_sum, mo_occ_b_sum, nelectron, spin):
-    """PS-UHF-002: alpha/beta occupation sums match nelectron and spin exactly."""
+def check_uhf_electron_count_conservation(mo_occ_a_sum, mo_occ_b_sum, nelectron, spin, nmo=None):
+    """PS-UHF-002: alpha/beta occupation sums match nelectron and spin exactly.
+
+    Precondition: each spin channel fits in the orbital space (n_alpha, n_beta
+    <= nmo); a request the basis cannot hold (e.g. triplet He in a one-function
+    basis) is an impossible input, not a count-conservation question.
+    """
+    if nmo is not None:
+        n_a = (nelectron + spin) // 2
+        n_b = nelectron - n_a
+        if n_a > nmo or n_b > nmo:
+            return
     trigger_if(
         mo_occ_a_sum + mo_occ_b_sum != nelectron, "PS-UHF-002",
         family="total_count", na=mo_occ_a_sum, nb=mo_occ_b_sum, nelectron=nelectron,
@@ -600,6 +617,14 @@ def _unrepresentable_norm_mask(mol):
     return bad
 
 
+def _ao_nprim(mol):
+    ao_loc = mol.ao_loc_nr()
+    npr = np.ones(ao_loc[-1])
+    for ib in range(mol.nbas):
+        npr[ao_loc[ib]:ao_loc[ib + 1]] = mol.bas_nprim(ib)
+    return npr
+
+
 @_guard
 def check_ao_self_overlap_normalization(diag_s, mol=None):
     """PS-GTO-001: normalized-AO self-overlap diagonal is 1.
@@ -622,6 +647,11 @@ def check_ao_self_overlap_normalization(diag_s, mol=None):
         if kap.shape == d.shape:
             # cancellation inside a contraction amplifies roundoff by kappa
             tol = np.maximum(base, 50.0 * eps64 * kap)  # swept worst diff/(eps*kappa) = 3.6
+        # the kernel sums nprim^2 primitive pairs; rounding grows ~eps*nprim
+        # (measured |S_ii-1| <= 3.7*eps*nprim for same-sign contractions up to 1536)
+        npr = _ao_nprim(mol)
+        if npr.shape == d.shape:
+            tol = np.maximum(tol, 50.0 * eps64 * npr * (kap if kap.shape == d.shape else 1.0))
     diff = d.max()
     trigger_if(bool(np.any(d > tol)), "PS-GTO-001", diff=diff, tol=float(np.max(tol)))
 
@@ -675,6 +705,10 @@ def grid_not_coarser_than_default(grids, mol):
         from pyscf import gto as _gto
         from pyscf.dft import gen_grid as gg
         if grids.level < gg.Grids.level:
+            return False
+        # AO-value screening threshold: a coarser (larger) cutoff zeroes AO
+        # values the quadrature needs; count error ~0.2*cutoff (H2/6-31G sweep)
+        if float(getattr(grids, "cutoff", gg.Grids.cutoff)) > float(gg.Grids.cutoff):
             return False
         prune = getattr(grids, "prune", None)
         if prune is not None and prune is not gg.nwchem_prune:
