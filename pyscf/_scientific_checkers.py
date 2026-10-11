@@ -174,6 +174,23 @@ def _guard(func):
 # Subsystem 1: scf/hf.py -- restricted Hartree-Fock SCF
 # ---------------------------------------------------------------------------
 
+def _blocks_to_ao(symm_orb, blocks, s):
+    """Map irrep blocks B_ir = O_ir^T S O_ir back to the AO metric through the
+    dual basis O^{-1}; symm_orb is complete but not necessarily Euclidean-
+    orthonormal (cart=True with a rotated frame)."""
+    o_all = np.hstack(symm_orb)
+    if o_all.shape[0] != o_all.shape[1]:
+        raise ValueError("incomplete symm_orb")
+    oinv = np.linalg.inv(o_all)
+    bd = np.zeros((o_all.shape[1],) * 2, dtype=np.result_type(s, o_all))
+    p0 = 0
+    for o, b in zip(symm_orb, blocks):
+        n = o.shape[1]
+        bd[p0:p0 + n, p0:p0 + n] = b
+        p0 += n
+    return oinv.conj().T @ bd @ oinv
+
+
 def solver_overlap(mf, s):
     """Overlap matrix the SCF eigensolver diagonalised against.
 
@@ -194,10 +211,7 @@ def solver_overlap(mf, s):
                 for ir, iid in enumerate(mol.irrep_id):
                     if iid not in (0, 1, 4, 5) and iid % 2 == 1:
                         blocks[ir] = blocks[ir - 1]
-            s_blk = np.zeros_like(s)
-            for o, b in zip(mol.symm_orb, blocks):
-                s_blk += o @ b @ o.conj().T
-            return s_blk
+            return _blocks_to_ao(mol.symm_orb, blocks, s)
     except Exception:
         pass
     return s
@@ -220,7 +234,7 @@ def check_rdm1_idempotency(dm, s):
 
 
 @_guard
-def check_electron_count_conservation(mol, pop_sum, mo_occ_sum, s=None):
+def check_electron_count_conservation(mol, pop_sum, mo_occ_sum, s=None, n_target=None):
     """PS-SCF-002: Mulliken population sum and mo_occ sum both equal nelectron.
 
     mo_occ_sum is None for AtomSphAverageRHF's internal average-of-
@@ -228,8 +242,12 @@ def check_electron_count_conservation(mol, pop_sum, mo_occ_sum, s=None):
     mo_occ is documented to be fractional by construction -- the
     exact-integer half of this law only applies to the outer SCF object a
     user actually runs. See repo-root PROGRESS.md, PS-SCF-002 fix.
+
+    ``n_target``: particle number the density is defined to carry when it is
+    not mol.nelectron (smearing at a fixed chemical potential mu0 is grand
+    canonical; the target is then sum(mo_occ)).
     """
-    nelec = mol.nelectron
+    nelec = mol.nelectron if n_target is None else n_target
     nao = max(mol.nao, 0 if s is None else s.shape[0])  # model Hamiltonians carry no AO basis on mol
     # trace(D S) accumulates rounding in proportion to the conditioning of S
     cond_s = 1.0 if s is None else max(1.0, float(np.linalg.cond(s)))
@@ -407,8 +425,9 @@ def check_orbital_irrep_purity(proj_total, mo_norm, cond_s=None, src=(), s=None,
     """PS-SYM-001: the irrep projections of every MO add up to its overlap norm.
 
     label_orb_symm projects each orbital on every irrep of mol.symm_orb with
-    the irrep-block overlap; because mol.symm_orb is a complete orthonormal
-    symmetry-adapted basis of the AO space, sum_irrep <mo|P_irrep|mo>_S must
+    the irrep-block overlap; because mol.symm_orb is a complete
+    symmetry-adapted basis of the AO space (the irrep blocks are mapped back to
+    the AO metric through its dual basis), sum_irrep <mo|P_irrep|mo>_S must
     equal <mo|mo>_S for ANY orbital, symmetry-pure or not. The purity of the
     caller-supplied orbitals (largest single-irrep share) is an input
     property that the function itself checks with its own tolerance, so it is
@@ -431,8 +450,11 @@ def check_orbital_irrep_purity(proj_total, mo_norm, cond_s=None, src=(), s=None,
         # two differ by d = ||S - S_blk||, shifting a normalised orbital's share by
         # d/lambda_min(S) (1 + d/lambda_min(S)) (first order vanishes for a pure irrep).
         s64 = np.asarray(s, dtype=float)
-        s_blk = sum(o @ (o.conj().T @ s64 @ o) @ o.conj().T for o in symm_orb)
-        d = float(np.linalg.norm(s64 - s_blk, 2))
+        try:
+            s_blk = _blocks_to_ao(symm_orb, [o.conj().T @ s64 @ o for o in symm_orb], s64)
+            d = float(np.linalg.norm(s64 - s_blk, 2))
+        except (ValueError, np.linalg.LinAlgError):
+            d = float("inf")  # not a complete basis: no near-symmetry allowance
         lam = float(np.linalg.eigvalsh((s64 + s64.T) / 2).min())
         # allowance only in the symmetry-tolerance regime (a basis that is not a symmetry
         # decomposition of the AO space shifts the shares by O(1) and must still alarm)
@@ -985,7 +1007,7 @@ def check_casscf_canonicalization_density_invariance(dm_before, dm_after, s, nao
 
 @_guard
 def check_natural_orbital_occupation_conservation(noons, nelectron, s, scf_level, dm_max=None, src=(),
-                                                  s_solver=None, dm_norm=None, orbitals=()):
+                                                  s_solver=None, dm_norm=None, orbitals=(), n_target=None):
     """PS-MCSCF-003: sum(NOONs) == nelectron; each NOON in [0,2] for SCF-level refs.
 
     A third, structurally distinct computational route to the electron
@@ -996,10 +1018,13 @@ def check_natural_orbital_occupation_conservation(noons, nelectron, s, scf_level
     N2/sto-3g RHF, BeH2/6-31g MP2): worst observed sum-diff/(eps64*cond(S))
     ratio was 2.74 (N2); worst RHF-only NOON-bound violation ratio was 1.54.
     50x gives ~18x / ~32x headroom respectively.
-    Precondition: floating-point orbital coefficients.
+    Precondition: floating-point orbital coefficients. ``n_target`` replaces
+    nelectron for a grand-canonical reference (smearing at a fixed mu0).
     """
     if not _is_floating(*orbitals):
         return
+    if n_target is not None:
+        nelectron = n_target
     noons = np.asarray(noons)
     cond_s = np.linalg.cond(s)
     tol = 50.0 * _eps_of(noons, *src) * cond_s
