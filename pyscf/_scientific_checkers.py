@@ -101,6 +101,25 @@ def _within(diff, tol) -> bool:
     return bool(diff <= tol)
 
 
+def _is_floating(*arrays) -> bool:
+    """True when every array supplied is floating-point or complex.
+
+    The laws below are statements about real-valued orbitals and densities;
+    a coefficient array of integer (or bool) dtype is silently truncated by
+    the library's in-place rotations and is not a scientific input.
+    ``None`` entries are ignored.
+    """
+    for a in arrays:
+        if a is None:
+            continue
+        dt = getattr(a, "dtype", None)
+        if dt is None:
+            dt = np.asarray(a).dtype
+        if not np.issubdtype(dt, np.inexact):
+            return False
+    return True
+
+
 @contextlib.contextmanager
 def _quiet():
     """Checker re-calls must not leak warnings or floating-point errors to user code.
@@ -281,7 +300,10 @@ def check_canonicalization_density_invariance(dm_before, dm_after, s, nao, mo_oc
     rotation inside a block leaves D unchanged only if every orbital of the
     block has the same occupation, so a block of unequal fractional
     occupations (a thermal/ensemble state) is outside the law.
+    Precondition: floating-point orbitals.
     """
+    if not _is_floating(*src):
+        return
     if mo_occ is not None:
         occ = np.asarray(mo_occ, dtype=float)
         open_occ = occ[(occ != 2) & (occ != 0)]
@@ -515,17 +537,60 @@ def _screened_integral_mask(mol, lmax=6, exp_min=1e-4):
     return bad
 
 
+def _unrepresentable_norm_mask(mol):
+    """True for AOs whose raw contraction cannot be normalised in float64.
+
+    Normalising a contraction inverts the quadratic form
+    q = max|c|^2 * integral(r^(2l+2) exp(-2 a_min r^2)) of its raw
+    coefficients; q must be a normal double with eps headroom
+    (sqrt(tiny/eps) < q^(1/2)-scale, no overflow). Coefficients beyond about
+    1e+-146..154 overflow or go subnormal in that product, far outside the
+    O(1e-6..1e3) range of any basis set.
+    """
+    from pyscf import gto as _gto
+    from pyscf.gto.mole import gaussian_int
+    ao_loc = mol.ao_loc_nr()
+    bad = np.zeros(ao_loc[-1], dtype=bool)
+    fi = np.finfo(float)
+    q_lo = fi.tiny / fi.eps
+    q_hi = fi.max
+    try:
+        for ib in range(mol.nbas):
+            symb = mol.atom_symbol(mol.bas_atom(ib))
+            l = mol.bas_angular(ib)
+            es = np.asarray(mol.bas_exp(ib), dtype=float)
+            shells = mol._basis.get(symb, mol._basis.get(_gto.mole._std_symbol(symb), []))
+            for shell in shells:
+                if shell[0] != l:
+                    continue
+                rows = ([r for r in shell[1:] if not isinstance(r, (int, float))]
+                        if isinstance(shell[1], (int, float)) else shell[1:])
+                arr = np.array(rows, dtype=float)
+                if arr.ndim != 2 or arr.shape[0] != len(es) or not np.allclose(arr[:, 0], es):
+                    continue
+                cmax = np.abs(arr[:, 1:]).max()
+                with np.errstate(all="ignore"):
+                    q = cmax ** 2 * gaussian_int(2 * l + 2, 2 * es.min())
+                if not np.isfinite(q) or not (q_lo < q < q_hi):
+                    bad[ao_loc[ib]:ao_loc[ib + 1]] = True
+    except Exception:
+        pass
+    return bad
+
+
 @_guard
 def check_ao_self_overlap_normalization(diag_s, mol=None):
     """PS-GTO-001: normalized-AO self-overlap diagonal is 1.
 
     Precondition: shells with l <= 6 and exponents >= 1e-4 (the range of every
-    standard basis set); outside it the integral kernel drops the
-    self-overlap of the tiny normalised prefactor.
+    standard basis set; outside it the integral kernel drops the
+    self-overlap of the tiny normalised prefactor), and contraction
+    coefficients whose normalisation integral is a normal float64 (no
+    overflow or underflow).
     """
     d = np.abs(np.asarray(diag_s) - 1.0)
     if mol is not None:
-        bad = _screened_integral_mask(mol)
+        bad = _screened_integral_mask(mol) | _unrepresentable_norm_mask(mol)
         if bad.shape == d.shape:
             d = np.where(bad, 0.0, d)
     base = 2000.0 * eps64  # ECP/contracted-shell bases reach ~8e-14; 5x headroom
@@ -543,29 +608,36 @@ def check_ao_self_overlap_normalization(diag_s, mol=None):
 # Subsystem 8 & 12: dft/rks.py, dft/uks.py
 # ---------------------------------------------------------------------------
 
-def _grid_resolves_basis(mol, coords, weights=None, tol=1e-3):
-    """True when the integration grid resolves every basis function.
+def grid_count_error(mol, coords, weights, dms):
+    """|tr(D (S_grid - S))| for each density matrix in ``dms``.
 
-    Measured, not assumed: the grid quadrature of each AO self-overlap,
-    sum_g w_g ao_i(g)^2, must reproduce the analytic S_ii to a relative
-    ``tol``. A function the grid cannot integrate (very diffuse or very tight
-    primitives, high angular momentum) makes the quadrature electron count
-    wrong by construction. Standard basis sets on the default grid are well
-    inside (relative error <= 1e-4).
+    S_grid = sum_g w_g ao_g ao_g^T is the overlap the integration grid
+    reproduces; the quantity is exactly the electron-count error the grid
+    quadrature alone introduces for density D (a diffuse or tight shell the
+    grid cannot resolve, with N electrons in it, scales the error by N).
+    Returns None when it cannot be evaluated.
     """
     if mol is None or coords is None or weights is None:
-        return True
+        return None
     coords = np.asarray(coords)
     weights = np.asarray(weights)
     if coords.shape[0] != weights.shape[0]:
-        return True
-    s_diag = np.diag(mol.intor_symmetric('int1e_ovlp'))
-    acc = np.zeros(mol.nao)
+        return None
+    s = mol.intor_symmetric('int1e_ovlp')
+    sg = np.zeros_like(s)
     step = 4000
     for p0 in range(0, coords.shape[0], step):
         ao = mol.eval_gto('GTOval', coords[p0:p0 + step])
-        acc += np.einsum('g,gi,gi->i', weights[p0:p0 + step], ao, ao)
-    return bool(np.all(np.abs(acc - s_diag) <= tol * s_diag))
+        sg += (ao * weights[p0:p0 + step, None]).T @ ao
+    return [float(abs(np.sum(np.asarray(d) * (sg - s)))) for d in dms]
+
+
+def _grid_resolves_density(mol, coords, weights, dms, tol):
+    """True unless the grid's own count error for the density exceeds tol/10."""
+    err = grid_count_error(mol, coords, weights, dms)
+    if err is None:
+        return True
+    return bool(max(err) <= 0.1 * tol)
 
 
 def grid_not_coarser_than_default(grids, mol):
@@ -607,14 +679,15 @@ def grid_not_coarser_than_default(grids, mol):
 def check_dft_grid_electron_count(n_grid, dm, s, mol=None, coords=None, weights=None):
     """PS-DFT-001: grid-quadrature electron count matches trace(D S).
 
-    Precondition: the grid resolves the basis (every AO self-overlap is
-    reproduced by the grid quadrature to 1e-3 relative).
+    Precondition: the grid resolves the density (the count error
+    |tr(D (S_grid - S))| the quadrature itself causes is below a tenth of
+    the tolerance).
     """
-    if not _grid_resolves_basis(mol, coords, weights):
+    tol = 1e-3
+    if not _grid_resolves_density(mol, coords, weights, [dm], tol):
         return
     tr = np.trace(dm @ s)
-    diff = abs(n_grid - tr)
-    tol = 1e-3  # calibrated from a grid-level sweep: worst observed |n - tr|
+    diff = abs(n_grid - tr)  # calibrated from a grid-level sweep: worst observed |n - tr|
     #             was 3.4e-6 on PySCF's default grid across 5 molecules/bases;
     #             set with generous headroom since quadrature error is real
     #             and grid-level dependent by design (5.8 T), not machine-eps.
@@ -625,9 +698,9 @@ def check_dft_grid_electron_count(n_grid, dm, s, mol=None, coords=None, weights=
 def check_uks_grid_electron_count(n_grid_tuple, dm, s, mol=None, coords=None, weights=None):
     """PS-UKS-001: per-spin-channel grid electron count matches trace(D_sigma S).
 
-    Precondition: as PS-DFT-001 (the grid resolves the basis).
+    Precondition: as PS-DFT-001, for each spin density.
     """
-    if not _grid_resolves_basis(mol, coords, weights):
+    if not _grid_resolves_density(mol, coords, weights, [dm[0], dm[1]], 1e-3):
         return
     n_a, n_b = n_grid_tuple[0], n_grid_tuple[1]
     tr_a = np.trace(dm[0] @ s)
@@ -891,6 +964,8 @@ def check_casscf_canonicalization_density_invariance(dm_before, dm_after, s, nao
     diff/(eps64*nao*cond(S)) ratio was 0.086 (well below 1, i.e. exact to
     within roundoff at every trial tested). 50x gives large headroom.
     """
+    if not _is_floating(mo_coeff):
+        return
     diff = np.abs(dm_before - dm_after).max()
     cond_s = np.linalg.cond(s)
     tol = 50.0 * _eps_of(dm_before, dm_after, mo_coeff, *src) * nao * cond_s
@@ -910,7 +985,7 @@ def check_casscf_canonicalization_density_invariance(dm_before, dm_after, s, nao
 
 @_guard
 def check_natural_orbital_occupation_conservation(noons, nelectron, s, scf_level, dm_max=None, src=(),
-                                                  s_solver=None, dm_norm=None):
+                                                  s_solver=None, dm_norm=None, orbitals=()):
     """PS-MCSCF-003: sum(NOONs) == nelectron; each NOON in [0,2] for SCF-level refs.
 
     A third, structurally distinct computational route to the electron
@@ -921,7 +996,10 @@ def check_natural_orbital_occupation_conservation(noons, nelectron, s, scf_level
     N2/sto-3g RHF, BeH2/6-31g MP2): worst observed sum-diff/(eps64*cond(S))
     ratio was 2.74 (N2); worst RHF-only NOON-bound violation ratio was 1.54.
     50x gives ~18x / ~32x headroom respectively.
+    Precondition: floating-point orbital coefficients.
     """
+    if not _is_floating(*orbitals):
+        return
     noons = np.asarray(noons)
     cond_s = np.linalg.cond(s)
     tol = 50.0 * _eps_of(noons, *src) * cond_s
@@ -991,7 +1069,7 @@ def check_ao2mo_permutation_symmetry(eri, nmo, cond_s, cmax=None, eri_ao_max=Non
 # ---------------------------------------------------------------------------
 
 @_guard
-def check_implicit_solvent_energy_sign(epcm, eps, lmax=None, nleb=None):
+def check_implicit_solvent_energy_sign(epcm, eps, lmax=None, nleb=None, grid_count_err=None, nelec=None):
     """PS-SOLV-001: epcm <= 0 for a physically realizable dielectric (eps>1).
 
     epcm is not locally forced by the one-line f_epsilon*<psi,Xvec>
@@ -1017,6 +1095,11 @@ def check_implicit_solvent_energy_sign(epcm, eps, lmax=None, nleb=None):
     # The angular quadrature must resolve the (lmax+1)^2 harmonic basis,
     # otherwise the discretized operator is not negative-definite.
     if nleb is not None and lmax is not None and nleb < (lmax + 1) ** 2:
+        return
+    # The solute density on the volume grid (psi) and the analytic potential
+    # (phi) come from the same charge only when the grid resolves the
+    # density; otherwise psi^T L^-1 phi is not a definite quadratic form.
+    if grid_count_err is not None and grid_count_err > 1e-3 * max(1.0, float(nelec or 0.0)):
         return
     # an energy that is zero by symmetry/neutrality is only defined to roundoff of the
     # underlying sums (~1e-14 Ha, up to ~1e-10 Ha for compact systems), so keep an

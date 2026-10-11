@@ -813,8 +813,12 @@ class ddCOSMO(lib.StreamObject):
         try:
             from pyscf import _scientific_checkers as _sc
             if _sc.enabled():
+                _dm2 = numpy.asarray(dm)
+                _gerr = _sc.grid_count_error(mol, self.grids.coords, self.grids.weights, [_dm2])
                 _sc.check_implicit_solvent_energy_sign(float(epcm), float(dielectric), lmax=self.lmax,
-                                                       nleb=gen_grid.LEBEDEV_ORDER[self.lebedev_order])
+                                                       nleb=gen_grid.LEBEDEV_ORDER[self.lebedev_order],
+                                                       grid_count_err=None if _gerr is None else _gerr[0],
+                                                       nelec=float(numpy.einsum('ij,ji', _dm2, mol.intor_symmetric('int1e_ovlp'))))
         except Exception:
             pass
 

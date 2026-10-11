@@ -367,7 +367,8 @@ def make_natural_orbitals (method_obj):
                 s_solver=_sc.solver_overlap(mf, S), dm_norm=float(numpy.linalg.norm(Dm, 2)),
                 src=[getattr(method_obj, _n, None) for _n in
                      ('mo_coeff', 'mo_occ', 't1', 't2', 'l1', 'l2', 'ci')]
-                    + [getattr(mf, 'mo_coeff', None)])
+                    + [getattr(mf, 'mo_coeff', None)],
+                orbitals=[getattr(method_obj, 'mo_coeff', None), getattr(mf, 'mo_coeff', None)])
     except Exception:
         pass
 
