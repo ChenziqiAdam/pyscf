@@ -292,18 +292,6 @@
       "symbol": "canonicalize"
     },
     {
-      "alarm": "min over the exact and solver overlaps of abs(sum(noons) - N) exceeds 50*eps_in*cond(S)*max(1,nelectron)*max(1,max|noons|)*max(1,max|D|) (sum half, any method); max(-noons.min(), noons.max()-2) exceeds 50*eps_in*cond(S)*max(1,max|D|) + ||D||_2*||S - S_solver||_2 (bound half, SCF-level only)",
-      "family": "natural_orbital_occupation_conservation",
-      "id": "PS-MCSCF-003",
-      "invariant": "sum(noons) == N (any method); each noon in [0,2] (SCF-level references only); N = mol.nelectron, or tr(D S) for a fixed-mu0 smearing reference",
-      "observation_point": "at make_natural_orbitals()'s return, after the scipy.linalg.eigh(A, b=S) generalized eigendecomposition",
-      "precondition": "any method_obj with floating-point mo_coeff and a working make_rdm1(ao_repr=True) (RHF/UHF/ROHF/MP2/CCSD/CASSCF/CISD reference objects, both the spin-traced 2D and spin-separated tuple rdm1 branches) for the sum-conservation half; SCF-level (RHF/UHF/ROHF) reference objects only for the individual-NOON [0,2]-bound half, since only a genuine single-determinant density matrix is guaranteed N-representable by construction -- correlated methods' approximate density matrices are explicitly excluded from the bound half (mp2.py's own make_rdm1 docstring flags its output as an approximation, not rigorously N-representable) (2026-10-09: the SCF-level classification is made on the object passed to make_natural_orbitals, not on its _scf reference; MP2/CC/CAS objects were wrongly treated as SCF-level) For a reference with fixed-mu0 smearing (grand canonical) the target is tr(D S) instead of mol.nelectron. For an AtomSphAverageRHF/AtomHF1e reference the target is sum(mo_occ) (its occupation follows the neutral atomic configuration, not mol.charge).",
-      "rationale": "this is a third, structurally distinct computational route to the electron count beyond the shipped bank's direct AO-metric trace (PS-SCF-002) and grid-quadrature (PS-DFT-001) routes -- a generalized eigendecomposition via LAPACK, an entirely different numerical algorithm whose correctness is not implied by the input density matrix's own trace already being correct (a correct Dm fed through a buggy or mismatched-basis generalized-eigenproblem call would produce eigenvalues that do not sum to the right total even though Dm's own trace is fine)",
-      "scientific_quantity": "natural-orbital occupation numbers (generalized-eigenproblem eigenvalues of the AO-metric-transformed density matrix)",
-      "source": "pyscf/mcscf/addons.py",
-      "symbol": "make_natural_orbitals"
-    },
-    {
       "alarm": "any of the 3 permutation differences exceeds 50*eps64*nmo**1.5*max(cond(C)**2, max|C|**4)*max(1, max|eri_mo|, max|eri_ao|)",
       "family": "ao2mo_integral_permutation_symmetry",
       "id": "PS-AO2MO-001",

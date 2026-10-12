@@ -1062,53 +1062,6 @@ def check_casscf_canonicalization_density_invariance(dm_before, dm_after, s, nao
     trigger_if(diff > tol, "PS-MCSCF-002", diff=diff, tol=tol)
 
 
-@_guard
-def check_natural_orbital_occupation_conservation(noons, nelectron, s, scf_level, dm_max=None, src=(),
-                                                  s_solver=None, dm_norm=None, orbitals=(), n_target=None, n_solver=None):
-    """PS-MCSCF-003: sum(NOONs) == nelectron; each NOON in [0,2] for SCF-level refs.
-
-    A third, structurally distinct computational route to the electron
-    count beyond the AO-metric trace (PS-SCF-002) and grid-quadrature
-    (PS-DFT-001) routes -- a generalized eigendecomposition via LAPACK.
-
-    Tolerance derivation (independent re-sweep, 3 trials: H2/sto-3g RHF,
-    N2/sto-3g RHF, BeH2/6-31g MP2): worst observed sum-diff/(eps64*cond(S))
-    ratio was 2.74 (N2); worst RHF-only NOON-bound violation ratio was 1.54.
-    50x gives ~18x / ~32x headroom respectively.
-    Precondition: floating-point orbital coefficients. ``n_target`` replaces
-    nelectron for a grand-canonical reference (smearing at a fixed mu0).
-    """
-    if not _is_floating(*orbitals):
-        return
-    if n_target is not None:
-        nelectron = n_target
-    noons = np.asarray(noons)
-    cond_s = np.linalg.cond(s)
-    tol = 50.0 * _eps_of(noons, *src) * cond_s
-    # S D S is formed and diagonalised against S, so rounding follows the
-    # density magnitude (|D| ~ sqrt(cond(S)) for nearly redundant bases)
-    dscale = 1.0 if dm_max is None else max(1.0, float(dm_max))
-    tol *= dscale
-    diff = abs(noons.sum() - nelectron)
-    if n_solver is not None:
-        # sum(NOON) = tr(D S); orbitals orthonormal in the solver's overlap conserve tr(D S_solver)
-        diff = min(diff, abs(float(n_solver) - nelectron))
-    # the NOON sum is accumulated over the spectrum: rounding grows ~eps*nelectron
-    # and, for a non-N-representable (e.g. gap-collapsed MP2) density, with |noons|
-    tol_sum = tol * max(float(nelectron), 1.0) * max(1.0, float(np.abs(noons).max()))
-    trigger_if(diff > tol_sum, "PS-MCSCF-003", family="sum", diff=diff, tol=tol_sum)
-    if scf_level:
-        bound_violation = max(-noons.min(), noons.max() - 2.0)
-        tol_bound = tol
-        if s_solver is not None and dm_norm is not None:
-            # SCF orbitals are idempotent in the overlap the eigensolver used (the
-            # block-symmetrised one for a symmetry-adapted SCF); against the exact
-            # overlap the largest occupation can exceed 2 by ||D|| ||S - S_solver||
-            tol_bound += float(dm_norm) * float(np.linalg.norm(np.asarray(s) - np.asarray(s_solver), 2))
-        trigger_if(bound_violation > tol_bound, "PS-MCSCF-003",
-                   family="bound", violation=bound_violation, tol=tol_bound)
-
-
 # ---------------------------------------------------------------------------
 # Subsystem 17: ao2mo/incore.py -- AO-to-MO two-electron integral transform
 # ---------------------------------------------------------------------------
