@@ -191,6 +191,21 @@ def _blocks_to_ao(symm_orb, blocks, s):
     return oinv.conj().T @ bd @ oinv
 
 
+def symm_block_overlap(mol, s):
+    """Block-symmetrised overlap of a symmetry-enabled mol; None if not applicable."""
+    try:
+        if not mol.symmetry or getattr(mol, "symm_orb", None) is None:
+            return None
+        blocks = [o.conj().T @ s @ o for o in mol.symm_orb]
+        if getattr(mol, "groupname", None) in ("Dooh", "Coov"):
+            for ir, iid in enumerate(mol.irrep_id):
+                if iid not in (0, 1, 4, 5) and iid % 2 == 1:
+                    blocks[ir] = blocks[ir - 1]
+        return _blocks_to_ao(mol.symm_orb, blocks, s)
+    except Exception:
+        return None
+
+
 def solver_overlap(mf, s):
     """Overlap matrix the SCF eigensolver diagonalised against.
 
@@ -234,7 +249,7 @@ def check_rdm1_idempotency(dm, s):
 
 
 @_guard
-def check_electron_count_conservation(mol, pop_sum, mo_occ_sum, s=None, n_target=None):
+def check_electron_count_conservation(mol, pop_sum, mo_occ_sum, s=None, n_target=None, pop_sum_solver=None):
     """PS-SCF-002: Mulliken population sum and mo_occ sum both equal nelectron.
 
     mo_occ_sum is None for AtomSphAverageRHF's internal average-of-
@@ -252,9 +267,14 @@ def check_electron_count_conservation(mol, pop_sum, mo_occ_sum, s=None, n_target
     # trace(D S) accumulates rounding in proportion to the conditioning of S
     cond_s = 1.0 if s is None else max(1.0, float(np.linalg.cond(s)))
     tol_trace = 50.0 * eps64 * nao * cond_s
+    # symmetry-adapted SCF on a geometry accepted within symm_geom_tol: orbitals are
+    # orthonormal in the block-symmetrised overlap, whose trace is the exact count
+    _d = abs(pop_sum - nelec)
+    if pop_sum_solver is not None:
+        _d = min(_d, abs(pop_sum_solver - nelec))
     trigger_if(
-        abs(pop_sum - nelec) > tol_trace, "PS-SCF-002",
-        family="mulliken_trace", diff=abs(pop_sum - nelec), tol=tol_trace,
+        _d > tol_trace, "PS-SCF-002",
+        family="mulliken_trace", diff=_d, tol=tol_trace,
     )
     if mo_occ_sum is not None:
         trigger_if(
@@ -342,7 +362,7 @@ def check_canonicalization_density_invariance(dm_before, dm_after, s, nao, mo_oc
 
 
 @_guard
-def check_chkfile_restore_electron_count(mol, dm, s, project, src=()):
+def check_chkfile_restore_electron_count(mol, dm, s, project, src=(), s_solver=None):
     """PS-SCF-006: checkpoint-projected initial guess conserves electron count.
 
     ``s`` is the overlap in which the restored orbitals are normalised: the
@@ -357,6 +377,9 @@ def check_chkfile_restore_electron_count(mol, dm, s, project, src=()):
     eps = _eps_of(dm, *src)
     tol = 50.0 * eps * nao * dmax if not project else 50.0 * eps * nao * 4 * dmax
     diff = abs(tr.real - mol.nelectron) if np.iscomplexobj(tr) else abs(tr - mol.nelectron)
+    if s_solver is not None:
+        _t = np.trace(dm @ s_solver) if dm.ndim == 2 else np.trace(dm[0] @ s_solver) + np.trace(dm[1] @ s_solver)
+        diff = min(diff, abs(float(np.real(_t)) - mol.nelectron))
     trigger_if(diff > tol, "PS-SCF-006", diff=diff, tol=tol, project=bool(project))
 
 
@@ -1041,7 +1064,7 @@ def check_casscf_canonicalization_density_invariance(dm_before, dm_after, s, nao
 
 @_guard
 def check_natural_orbital_occupation_conservation(noons, nelectron, s, scf_level, dm_max=None, src=(),
-                                                  s_solver=None, dm_norm=None, orbitals=(), n_target=None):
+                                                  s_solver=None, dm_norm=None, orbitals=(), n_target=None, n_solver=None):
     """PS-MCSCF-003: sum(NOONs) == nelectron; each NOON in [0,2] for SCF-level refs.
 
     A third, structurally distinct computational route to the electron
@@ -1067,6 +1090,9 @@ def check_natural_orbital_occupation_conservation(noons, nelectron, s, scf_level
     dscale = 1.0 if dm_max is None else max(1.0, float(dm_max))
     tol *= dscale
     diff = abs(noons.sum() - nelectron)
+    if n_solver is not None:
+        # sum(NOON) = tr(D S); orbitals orthonormal in the solver's overlap conserve tr(D S_solver)
+        diff = min(diff, abs(float(n_solver) - nelectron))
     # the NOON sum is accumulated over the spectrum: rounding grows ~eps*nelectron
     # and, for a non-N-representable (e.g. gap-collapsed MP2) density, with |noons|
     tol_sum = tol * max(float(nelectron), 1.0) * max(1.0, float(np.abs(noons).max()))

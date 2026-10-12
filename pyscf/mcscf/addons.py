@@ -369,14 +369,16 @@ def make_natural_orbitals (method_obj):
             if (_n_target is None and method_obj is mf
                     and type(mf).__name__ in ('AtomSphAverageRHF', 'AtomHF1e')):
                 _n_target = float(numpy.sum(mf.mo_occ))
+            _s_solver = _sc.solver_overlap(mf, S)
             _sc.check_natural_orbital_occupation_conservation(
                 noons, mf.mol.nelectron, S, _scf_level, dm_max=float(numpy.abs(Dm).max()),
-                s_solver=_sc.solver_overlap(mf, S), dm_norm=float(numpy.linalg.norm(Dm, 2)),
+                s_solver=_s_solver, dm_norm=float(numpy.linalg.norm(Dm, 2)),
                 src=[getattr(method_obj, _n, None) for _n in
                      ('mo_coeff', 'mo_occ', 't1', 't2', 'l1', 'l2', 'ci')]
                     + [getattr(mf, 'mo_coeff', None)],
                 orbitals=[getattr(method_obj, 'mo_coeff', None), getattr(mf, 'mo_coeff', None)],
-                n_target=_n_target)
+                n_target=_n_target,
+                n_solver=(float(numpy.trace(Dm @ _s_solver).real) if _s_solver is not S else None))
     except Exception:
         pass
 

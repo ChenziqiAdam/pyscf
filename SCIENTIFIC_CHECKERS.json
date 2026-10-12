@@ -16,10 +16,10 @@
       "symbol": "kernel (observation point; make_rdm1 is where D is built)"
     },
     {
-      "alarm": "abs(trace(D S) - N) exceeds 50*eps64*nao (trace half, all paths); sum(mo_occ) != N exactly (integer half, tol=0, skipped entirely -- mo_occ_sum=None -- when type(mf) is AtomSphAverageRHF) (trace half: tolerance also scales with cond(S))",
+      "alarm": "min over the exact and solver overlaps of abs(trace(D S) - N) exceeds 50*eps64*nao (trace half, all paths); sum(mo_occ) != N exactly (integer half, tol=0, skipped entirely -- mo_occ_sum=None -- when type(mf) is AtomSphAverageRHF) (trace half: tolerance also scales with cond(S))",
       "family": "electron_count_conservation",
       "id": "PS-SCF-002",
-      "invariant": "trace(D S) == N (numerical, checked on all paths) and sum(mo_occ) == N (exact integer, checked only on the outer SCF object's own mo_occ, not AtomSphAverageRHF's internal one), with N = mol.nelectron, or sum(mo_occ) for a fixed-mu0 smearing SCF",
+      "invariant": "trace(D S) == N (numerical, checked on all paths) and sum(mo_occ) == N (exact integer, checked only on the outer SCF object's own mo_occ, not AtomSphAverageRHF's internal one), with N = mol.nelectron, or sum(mo_occ) for a fixed-mu0 smearing SCF (the trace is evaluated in the exact overlap and, for a symmetry-adapted SCF, also in the block-symmetrised overlap the eigensolver used; the smaller deviation counts)",
       "observation_point": "at kernel()'s return, alongside PS-SCF-001",
       "precondition": "any RHF/UHF/ROHF calculation, converged or not, any molecule/basis/charge/spin -- EXCLUDING AtomSphAverageRHF's internal average-of-configuration atomic sub-solve (init_guess='atom'/'huckel' invoke it internally), whose mo_occ is fractional by construction (atom_hf.py's frac_occ, e.g. O 2p: 4/3) and has no integer-valued law to check The sum(mo_occ) half applies only to integer occupations (smeared/fractional occupations are excluded). Smearing at a fixed chemical potential (smearing(mu0=...)) is grand canonical: the target particle number is sum(mo_occ) instead of mol.nelectron. For AtomSphAverageRHF (and its AtomHF1e variant) the particle number is that of the element's atomic configuration, sum(mo_occ), since mol.charge does not enter its occupation; the target is then sum(mo_occ).",
       "rationale": "total electron count is the most basic conserved quantity in electronic structure; mol.nelectron, get_occ's Aufbau filling, and mulliken_pop's AO-integral-based trace are three independently implemented paths that should agree",
@@ -64,10 +64,10 @@
       "symbol": "canonicalize"
     },
     {
-      "alarm": "abs(trace(dm s) - nelectron) exceeds 50*eps_in*nao*max(1,max|D|) (project=False) or 50*eps_in*nao*4*max(1,max|D|) (project=True), eps_in = unit roundoff of the coarsest dtype among the density matrix and the stored orbitals (eps64 for float64 storage)",
+      "alarm": "min over the exact and block-symmetrised overlaps of abs(trace(dm s) - nelectron) exceeds 50*eps_in*nao*max(1,max|D|) (project=False) or 50*eps_in*nao*4*max(1,max|D|) (project=True), eps_in = unit roundoff of the coarsest dtype among the density matrix and the stored orbitals (eps64 for float64 storage)",
       "family": "chkfile_projection_electron_count",
       "id": "PS-SCF-006",
-      "invariant": "trace(dm @ get_ovlp(mol)) == mol.nelectron (2026-10-09: S is the target mol's overlap for project=True and the checkpoint molecule's overlap for project=False, the metric in which the reused orbitals are normalised)",
+      "invariant": "trace(dm @ get_ovlp(mol)) == mol.nelectron (2026-10-09: S is the target mol's overlap for project=True and the checkpoint molecule's overlap for project=False, the metric in which the reused orbitals are normalised); for a symmetry-adapted target the trace may equally be taken in the block-symmetrised overlap of that molecule",
       "observation_point": "at init_guess_by_chkfile()'s return, computing trace(dm @ s) for the target mol, gated on the same-system inertia-moment check",
       "precondition": "any call with a checkpoint from a completed SCF, restoring onto the SAME chemical system (checkpoint's and target mol's moments of inertia agree within 1% relative, the same signal init_guess_by_chkfile itself already computes and warns on for dissimilar geometries) -- basis and/or geometry may still differ; genuinely different molecules (different atoms/composition) are explicitly out of scope The checkpoint's own occupations must sum to the target nelectron.",
       "rationale": "an initial guess with the wrong electron count doesn't just converge slowly -- for the primary project=True different-molecule restart use case, it can start the SCF searching for the wrong physical state entirely",
@@ -199,9 +199,9 @@
       "alarm": "max(abs(rho_from_dm - rho_from_mo)) exceeds 50*eps_in*nao*10*max(1, max|rho|, (max|C_occ|*max|ao|)**2)",
       "family": "grid_density_representation_consistency",
       "id": "PS-NUMINT-001",
-      "invariant": "eval_rho(mol, ao, D) == eval_rho2(mol, ao, C_occ, n_occ) on the same grid batch, where D = C_occ diag(n_occ) C_occ^T is built from the same orbitals that feed eval_rho2",
+      "invariant": "eval_rho(mol, ao, D) == eval_rho2(mol, ao, C_occ, n_occ) on the same grid batch, where D = C_occ diag(n_occ) C_occ^T is built from the orbitals with n_occ > OCCDROP that feed eval_rho2",
       "observation_point": "inside rks.py's get_veff(), on a 500-point grid subsample, whenever a matching mo_coeff/mo_occ pair is available",
-      "precondition": "a ground-state RKS calculation whose mo_coeff/mo_occ are confirmed (within 1e-8) to reproduce the density matrix dm in use, LDA xctype",
+      "precondition": "a ground-state RKS calculation whose mo_coeff/mo_occ are confirmed (within 1e-8) to reproduce the density matrix dm in use, LDA xctype; only orbitals with occupation above numint.OCCDROP (1e-12), the cutoff eval_rho2 applies by design, enter the comparison",
       "rationale": "eval_rho (the function PySCF's production DFT path actually calls) and eval_rho2 share no intermediate computation -- one contracts ao against dm via _dot_ao_dm, the other transforms ao to MO space directly -- making agreement a genuine cross-implementation check",
       "scientific_quantity": "real-space electron density rho(r) via density-matrix contraction vs. MO-coefficient contraction",
       "source": "pyscf/dft/numint.py",
@@ -292,7 +292,7 @@
       "symbol": "canonicalize"
     },
     {
-      "alarm": "abs(sum(noons) - N) exceeds 50*eps_in*cond(S)*max(1,nelectron)*max(1,max|noons|)*max(1,max|D|) (sum half, any method); max(-noons.min(), noons.max()-2) exceeds 50*eps_in*cond(S)*max(1,max|D|) + ||D||_2*||S - S_solver||_2 (bound half, SCF-level only)",
+      "alarm": "min over the exact and solver overlaps of abs(sum(noons) - N) exceeds 50*eps_in*cond(S)*max(1,nelectron)*max(1,max|noons|)*max(1,max|D|) (sum half, any method); max(-noons.min(), noons.max()-2) exceeds 50*eps_in*cond(S)*max(1,max|D|) + ||D||_2*||S - S_solver||_2 (bound half, SCF-level only)",
       "family": "natural_orbital_occupation_conservation",
       "id": "PS-MCSCF-003",
       "invariant": "sum(noons) == N (any method); each noon in [0,2] (SCF-level references only); N = mol.nelectron, or tr(D S) for a fixed-mu0 smearing reference",

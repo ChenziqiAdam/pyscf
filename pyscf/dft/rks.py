@@ -103,7 +103,8 @@ def get_veff(ks, mol=None, dm=None, dm_last=0, vhf_last=0, hermi=1):
                 if (getattr(ks, 'mo_coeff', None) is not None
                         and getattr(ks, 'mo_occ', None) is not None
                         and ks.mo_coeff.ndim == 2):
-                    _occ_idx = ks.mo_occ > 0
+                    # same occupation mask as eval_rho2, which drops occ <= OCCDROP by design
+                    _occ_idx = ks.mo_occ > numint.OCCDROP
                     _mo_occ_coeff = ks.mo_coeff[:, _occ_idx]
                     _mo_occ_vals = ks.mo_occ[_occ_idx]
                     _reconstructed_dm = (_mo_occ_coeff * _mo_occ_vals) @ _mo_occ_coeff.conj().T

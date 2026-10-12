@@ -272,7 +272,9 @@ Keyword argument "init_dm" is replaced by "dm0"''')
                          if getattr(mf, 'mu0', None) is not None
                          or type(mf).__name__ in ('AtomSphAverageRHF', 'AtomHF1e') else None)
             _sc.check_electron_count_conservation(
-                mol, float(_pop.sum()), _mo_occ_sum, s1e, n_target=_n_target)
+                mol, float(_pop.sum()), _mo_occ_sum, s1e, n_target=_n_target,
+                pop_sum_solver=(float(numpy.einsum('ij,ji', dm, _s_solver).real)
+                                if _s_solver is not s1e else None))
     except Exception:
         pass
 
@@ -788,7 +790,9 @@ def init_guess_by_chkfile(mol, chkfile_name, project=None):
                 # checkpoint molecule's overlap; project=True renormalises in mol's
                 _s_check = get_ovlp(mol if project else chk_mol)
                 _sc.check_chkfile_restore_electron_count(mol, numpy.asarray(dm), _s_check, project,
-                                                         src=(mo,))
+                                                         src=(mo,),
+                                                         s_solver=_sc.symm_block_overlap(
+                                                             mol if project else chk_mol, _s_check))
     except Exception:
         pass
 
