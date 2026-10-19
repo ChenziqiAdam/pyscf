@@ -16,12 +16,12 @@
       "symbol": "kernel (observation point; make_rdm1 is where D is built)"
     },
     {
-      "alarm": "min over the exact and solver overlaps of abs(trace(D S) - N) exceeds 50*eps64*nao (trace half, all paths); sum(mo_occ) != N exactly (integer half, tol=0, skipped entirely -- mo_occ_sum=None -- when type(mf) is AtomSphAverageRHF) (trace half: tolerance also scales with cond(S))",
+      "alarm": "min over the exact and solver overlaps of abs(trace(D S) - N) exceeds 50*eps64*nao (+ 1e-5*dN/dmu for fixed-N smearing) (trace half, all paths); sum(mo_occ) != N exactly (integer half, tol=0, skipped entirely -- mo_occ_sum=None -- when type(mf) is AtomSphAverageRHF) (trace half: tolerance also scales with cond(S))",
       "family": "electron_count_conservation",
       "id": "PS-SCF-002",
       "invariant": "trace(D S) == N (numerical, checked on all paths) and sum(mo_occ) == N (exact integer, checked only on the outer SCF object's own mo_occ, not AtomSphAverageRHF's internal one), with N = mol.nelectron, or sum(mo_occ) for a fixed-mu0 smearing SCF (the trace is evaluated in the exact overlap and, for a symmetry-adapted SCF, also in the block-symmetrised overlap the eigensolver used; the smaller deviation counts)",
       "observation_point": "at kernel()'s return, alongside PS-SCF-001",
-      "precondition": "any RHF/UHF/ROHF calculation, converged or not, any molecule/basis/charge/spin -- EXCLUDING AtomSphAverageRHF's internal average-of-configuration atomic sub-solve (init_guess='atom'/'huckel' invoke it internally), whose mo_occ is fractional by construction (atom_hf.py's frac_occ, e.g. O 2p: 4/3) and has no integer-valued law to check The sum(mo_occ) half applies only to integer occupations (smeared/fractional occupations are excluded: any run whose get_occ is an active smearing, i.e. sigma and smearing_method set, whatever the occupation values, and any other occupations more than 1e-12 from integers). Smearing at a fixed chemical potential (smearing(mu0=...)) is grand canonical: the target particle number is sum(mo_occ) instead of mol.nelectron. For AtomSphAverageRHF (and its AtomHF1e variant) the particle number is that of the element's atomic configuration, sum(mo_occ), since mol.charge does not enter its occupation; the target is then sum(mo_occ).",
+      "precondition": "any RHF/UHF/ROHF calculation, converged or not, any molecule/basis/charge/spin -- EXCLUDING AtomSphAverageRHF's internal average-of-configuration atomic sub-solve (init_guess='atom'/'huckel' invoke it internally), whose mo_occ is fractional by construction (atom_hf.py's frac_occ, e.g. O 2p: 4/3) and has no integer-valued law to check The sum(mo_occ) half applies only to integer occupations (smeared/fractional occupations are excluded: any run whose get_occ is an active smearing, i.e. sigma and smearing_method set, whatever the occupation values, and any other occupations more than 1e-12 from integers). Smearing at a fixed chemical potential (smearing(mu0=...)) is grand canonical: the target particle number is sum(mo_occ) instead of mol.nelectron. For AtomSphAverageRHF (and its AtomHF1e variant) the particle number is that of the element's atomic configuration, sum(mo_occ), since mol.charge does not enter its occupation; the target is then sum(mo_occ). Fixed-N smearing (no mu0) carries N only to its chemical-potential root find (Powell, xtol 1e-5 Ha), so the trace half allows that count resolution, 1e-5*dN/dmu, with dN/dmu from the returned occupations (Fermi: g*sum f(1-f)/sigma; Gaussian: g*sum exp(-x^2)/(sigma*sqrt(pi)), x = erfcinv(2f); g = 2 restricted, 1 per spin orbital).",
       "rationale": "total electron count is the most basic conserved quantity in electronic structure; mol.nelectron, get_occ's Aufbau filling, and mulliken_pop's AO-integral-based trace are three independently implemented paths that should agree",
       "scientific_quantity": "total electron count, cross-checked via trace(D S) against mol.nelectron and sum(mo_occ) against mol.nelectron",
       "source": "pyscf/scf/hf.py",
@@ -304,7 +304,7 @@
       "symbol": "general"
     },
     {
-      "alarm": "epcm exceeds max(50*eps64*abs(epcm), 1e-9 Ha)",
+      "alarm": "epcm exceeds max(50*eps64*abs(epcm), 1e-9 Ha, and for ddCOSMO (|tr(D (S_grid - S))| / max(1, N)) * 0.5*f_eps*sum_A Z_A^2/R_A, the volume-grid quadrature error of psi times the reaction-field scale)",
       "family": "implicit_solvent_energy_sign",
       "id": "PS-SOLV-001",
       "invariant": "epcm <= 0 for eps>1",

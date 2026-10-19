@@ -275,8 +275,11 @@ Keyword argument "init_dm" is replaced by "dm0"''')
             _n_target = (float(numpy.sum(mo_occ))
                          if getattr(mf, 'mu0', None) is not None
                          or type(mf).__name__ in ('AtomSphAverageRHF', 'AtomHF1e') else None)
+            # fixed-N smearing reaches mol.nelectron only to its mu root find
+            # (repair 2026-10-23): the trace half gets that resolution as slack
             _sc.check_electron_count_conservation(
                 mol, float(_pop.sum()), _mo_occ_sum, s1e, n_target=_n_target,
+                n_slack=_sc.smearing_count_resolution(mf, mo_occ),
                 pop_sum_solver=(float(numpy.einsum('ij,ji', dm, _s_solver).real)
                                 if _s_solver is not s1e else None))
     except Exception:

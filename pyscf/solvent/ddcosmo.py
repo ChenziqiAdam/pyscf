@@ -818,7 +818,9 @@ class ddCOSMO(lib.StreamObject):
                 _sc.check_implicit_solvent_energy_sign(float(epcm), float(dielectric), lmax=self.lmax,
                                                        nleb=gen_grid.LEBEDEV_ORDER[self.lebedev_order],
                                                        grid_count_err=None if _gerr is None else _gerr[0],
-                                                       nelec=float(numpy.einsum('ij,ji', _dm2, mol.intor_symmetric('int1e_ovlp'))))
+                                                       nelec=float(numpy.einsum('ij,ji', _dm2, mol.intor_symmetric('int1e_ovlp'))),
+                                                       rf_scale=0.5 * abs(f_epsilon) * float(numpy.sum(
+                                                           mol.atom_charges() ** 2 / numpy.asarray(r_vdw))))
         except Exception:
             pass
 

@@ -256,8 +256,36 @@ def smeared_occupations(mf) -> bool:
     return bool(getattr(mf, 'sigma', None)) and bool(getattr(mf, 'smearing_method', None))
 
 
+# scf.addons._smearing_optimize resolves the chemical potential with Powell at
+# xtol = 1e-5 (Hartree), so N(mu) is fixed only to that resolution in mu.
+_SMEARING_MU_XTOL = 1e-5
+
+
+def smearing_count_resolution(mf, mo_occ) -> float:
+    """Electron-count resolution of a fixed-N smearing get_occ (repair 2026-10-23):
+    xtol(mu) * dN/dmu, with dN/dmu evaluated from the returned occupations
+    (Fermi: g sum f(1-f)/sigma; Gaussian: g sum exp(-x^2)/(sigma sqrt(pi)),
+    x = erfcinv(2f); g = 2 for restricted, 1 per spin orbital). 0 for integer
+    occupations and for fixed-mu0 (grand canonical) smearing, whose target is
+    sum(mo_occ) anyway. A 121-sigma (0.005-0.3) x 3-molecule (Be, H2, N2) x
+    2-method sweep of the root-finder gave |sum(occ) - N| <= 3e-11, at most 5e-7 of this resolution
+    (beyond it only at 1-ulp deficits where dN/dmu ~ 0, inside the trace budget)."""
+    if not smeared_occupations(mf) or getattr(mf, 'mu0', None) is not None:
+        return 0.0
+    g = 2.0 if mf.istype('RHF') else 1.0
+    f = np.clip(np.ravel(np.asarray(mo_occ, dtype=float)) / g, 0.0, 1.0)
+    sigma = float(mf.sigma)
+    if str(mf.smearing_method).lower() == 'fermi':
+        dn_dmu = g * float(np.sum(f * (1.0 - f))) / sigma
+    else:
+        from scipy.special import erfcinv
+        dn_dmu = g * float(np.sum(np.exp(-erfcinv(2.0 * f) ** 2))) / (sigma * np.sqrt(np.pi))
+    return _SMEARING_MU_XTOL * dn_dmu
+
+
 @_guard
-def check_electron_count_conservation(mol, pop_sum, mo_occ_sum, s=None, n_target=None, pop_sum_solver=None):
+def check_electron_count_conservation(mol, pop_sum, mo_occ_sum, s=None, n_target=None, pop_sum_solver=None,
+                                      n_slack=0.0):
     """PS-SCF-002: Mulliken population sum and mo_occ sum both equal nelectron.
 
     mo_occ_sum is None for AtomSphAverageRHF's internal average-of-
@@ -269,12 +297,16 @@ def check_electron_count_conservation(mol, pop_sum, mo_occ_sum, s=None, n_target
     ``n_target``: particle number the density is defined to carry when it is
     not mol.nelectron (smearing at a fixed chemical potential mu0 is grand
     canonical; the target is then sum(mo_occ)).
+
+    ``n_slack``: particle-number resolution of the occupation solver
+    (smearing_count_resolution for fixed-N smearing; 0 otherwise). The smeared
+    density carries N only to the chemical-potential root find, not to rounding.
     """
     nelec = mol.nelectron if n_target is None else n_target
     nao = max(mol.nao, 0 if s is None else s.shape[0])  # model Hamiltonians carry no AO basis on mol
     # trace(D S) accumulates rounding in proportion to the conditioning of S
     cond_s = 1.0 if s is None else max(1.0, float(np.linalg.cond(s)))
-    tol_trace = 50.0 * eps64 * nao * cond_s
+    tol_trace = 50.0 * eps64 * nao * cond_s + float(n_slack)
     # symmetry-adapted SCF on a geometry accepted within symm_geom_tol: orbitals are
     # orthonormal in the block-symmetrised overlap, whose trace is the exact count
     _d = abs(pop_sum - nelec)
@@ -1115,7 +1147,8 @@ def check_ao2mo_permutation_symmetry(eri, nmo, cond_s, cmax=None, eri_ao_max=Non
 # ---------------------------------------------------------------------------
 
 @_guard
-def check_implicit_solvent_energy_sign(epcm, eps, lmax=None, nleb=None, grid_count_err=None, nelec=None):
+def check_implicit_solvent_energy_sign(epcm, eps, lmax=None, nleb=None, grid_count_err=None, nelec=None,
+                                      rf_scale=None):
     """PS-SOLV-001: epcm <= 0 for a physically realizable dielectric (eps>1).
 
     epcm is not locally forced by the one-line f_epsilon*<psi,Xvec>
@@ -1151,6 +1184,15 @@ def check_implicit_solvent_energy_sign(epcm, eps, lmax=None, nleb=None, grid_cou
     # underlying sums (~1e-14 Ha, up to ~1e-10 Ha for compact systems), so keep an
     # absolute floor of 1e-9 Ha
     tol = max(50.0 * eps64 * abs(epcm), 1e-9)
+    # Volume-grid quadrature (repair 2026-10-23): psi is integrated on the volume
+    # grid while phi is analytic, so epcm is known only to the grid's relative
+    # quadrature error times the reaction-field scale the electrons must cancel,
+    # rf_scale = 0.5 f_eps sum_A Z_A^2 / R_A. Near an exact cancellation (a diffuse
+    # anion tuned to epcm ~ 0) the excursion is that error: H- at the cancelling
+    # exponent, grid level 3/5/7 gives max epcm 7.9e-9/3.4e-10/3.9e-11 Ha against
+    # (grid_count_err/nelec)*rf_scale = 1.2e-7/1.0e-8/4.7e-10 Ha.
+    if grid_count_err is not None and rf_scale is not None and nelec:
+        tol = max(tol, float(grid_count_err) / max(1.0, float(nelec)) * float(rf_scale))
     trigger_if(epcm > tol, "PS-SOLV-001", epcm=epcm, tol=tol, eps=eps)
 
 
