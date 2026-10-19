@@ -260,8 +260,12 @@ Keyword argument "init_dm" is replaced by "dm0"''')
             # Smeared/fractional occupations (addons.smearing_, float_occ_)
             # sum to nelectron only to the smearing root-finder tolerance,
             # not exactly; the exact mo_occ-sum law applies to integer
-            # occupations only.
+            # occupations only. A smeared run is excluded by mechanism, not
+            # by value: at low sigma its occupations come within 1e-12 of
+            # integers (H2 fermi sigma=0.0146: [2-8e-13, 8e-13, 0, 0], sum 1 ulp
+            # below 2) and pass the value gate (repair 2026-10-19).
             _mo_occ_sum = (None if type(mf).__name__ == 'AtomSphAverageRHF'
+                           or _sc.smeared_occupations(mf)
                            or not numpy.allclose(mo_occ, numpy.round(mo_occ), rtol=0, atol=1e-12)
                            else float(numpy.sum(mo_occ)))
             # fixed-chemical-potential smearing (smearing(mu0=...)) is grand

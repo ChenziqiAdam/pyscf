@@ -248,6 +248,14 @@ def check_rdm1_idempotency(dm, s):
     trigger_if(diff > tol, "PS-SCF-001", diff=diff, tol=tol)
 
 
+def smeared_occupations(mf) -> bool:
+    """True if mf's get_occ is a smearing occupation (scf.addons.smearing_ or the PBC
+    variants) that is active, i.e. the condition under which _SmearingSCF.get_occ does
+    not defer to the aufbau fill. Its occupations are fractional by construction
+    (a chemical-potential root find), even when they sit within 1e-12 of integers."""
+    return bool(getattr(mf, 'sigma', None)) and bool(getattr(mf, 'smearing_method', None))
+
+
 @_guard
 def check_electron_count_conservation(mol, pop_sum, mo_occ_sum, s=None, n_target=None, pop_sum_solver=None):
     """PS-SCF-002: Mulliken population sum and mo_occ sum both equal nelectron.
