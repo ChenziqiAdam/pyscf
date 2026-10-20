@@ -476,15 +476,37 @@ def check_mp2_t2_symmetry(t2, cmax=None):
     trigger_if(diff > tol, "PS-MP2-002", diff=diff, tol=tol)
 
 
+def closed_shell_reference(mo_occ, nelectron) -> bool:
+    """True when mo_occ is the integer closed-shell reference a restricted
+    post-HF solver (RMP2/RCISD/RCCSD) assumes.
+
+    Those solvers take every orbital with mo_occ > 0 as doubly occupied
+    (get_nocc counts mo_occ > 0), so their densities describe 2*nocc electrons.
+    That equals nelectron only when the reference occupations are integers in
+    {0, 2}: a smeared (fractional) reference such as a Fermi/Gaussian-smeared
+    RHF puts a positive tail on every virtual, and a mocked reference whose
+    occupations do not sum to nelectron does not describe an N-electron state.
+    Both are outside the trace laws, not violations of them. get_occ stores
+    integer occupations exactly (2.0 / 0.0); the 1e-8 slack only absorbs a
+    caller's float round trip.
+    """
+    if mo_occ is None:
+        return False
+    occ = np.asarray(mo_occ, dtype=float).ravel()
+    if abs(float(np.sum(occ)) - nelectron) > 1e-8:
+        return False
+    return bool(np.all(np.abs(occ[occ > 0] - 2.0) <= 1e-8))
+
+
 @_guard
 def check_mp2_rdm1_trace(dm1, nelectron, nmo, mo_occ=None, src=()):
     """PS-MP2-003: MP2 one-particle density matrix trace == nelectron.
 
-    Precondition: the reference carries the molecule's occupations (a mocked
-    reference whose mo_occ is absent or does not sum to nelectron does not
-    describe an N-electron state).
+    Precondition: the reference carries the molecule's integer closed-shell
+    occupations (closed_shell_reference): not absent, summing to nelectron, and
+    every orbital with mo_occ > 0 doubly occupied (no smeared reference).
     """
-    if mo_occ is None or abs(float(np.sum(mo_occ)) - nelectron) > 1e-8:
+    if not closed_shell_reference(mo_occ, nelectron):
         return
     tr = np.trace(dm1)
     diff = abs(tr - nelectron)
@@ -862,12 +884,16 @@ def check_ccsd_t2_symmetry(t2):
 
 
 @_guard
-def check_ccsd_rdm1_trace(dm1, nelectron, nmo, src=()):
+def check_ccsd_rdm1_trace(dm1, nelectron, nmo, src=(), mo_occ=None):
     """PS-CC-002: CCSD one-particle density matrix (with lambda) trace == nelectron.
 
     Precondition: the full density (with_mf=True); the correlation-only part has
-    trace zero by construction.
+    trace zero by construction. When the hook supplies the reference mo_occ, it
+    must be an integer closed-shell reference (closed_shell_reference; a smeared
+    reference makes CCSD treat every orbital with mo_occ > 0 as doubly occupied).
     """
+    if mo_occ is not None and not closed_shell_reference(mo_occ, nelectron):
+        return
     tr = np.trace(dm1)
     diff = abs(tr - nelectron)
     tol = 50.0 * _eps_of(dm1, *src) * nmo
@@ -1024,9 +1050,9 @@ def check_fci_energy_eigenvalue_consistency(h1e, eri, fcivec, norb, nelec, ecore
 def check_cisd_rdm1_trace(dm1, nelectron, nmo, mo_occ=None, src=()):
     """PS-CISD-001: CISD one-particle density matrix trace == nelectron.
 
-    Precondition: the reference carries the molecule's occupations (a mocked
-    reference whose mo_occ is absent or does not sum to nelectron does not
-    describe an N-electron state).
+    Precondition: the reference carries the molecule's integer closed-shell
+    occupations (closed_shell_reference): not absent, summing to nelectron, and
+    every orbital with mo_occ > 0 doubly occupied (no smeared reference).
 
     _gamma1_intermediates builds doo/dov/dvo/dvv from the variational,
     c0-normalized amplitude triple (c0,c1,c2) -- structurally different
@@ -1038,7 +1064,7 @@ def check_cisd_rdm1_trace(dm1, nelectron, nmo, mo_occ=None, src=()):
     N2, sto-3g): worst observed diff/(eps64*nmo) ratio was 1.33. 50x gives
     ~37x headroom.
     """
-    if mo_occ is None or abs(float(np.sum(mo_occ)) - nelectron) > 1e-8:
+    if not closed_shell_reference(mo_occ, nelectron):
         return
     tr = np.trace(dm1)
     diff = abs(tr - nelectron)

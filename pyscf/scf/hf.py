@@ -1518,8 +1518,9 @@ def dip_moment(mol, dm, unit='Debye', origin=None, verbose=logger.NOTE, **kwargs
             from pyscf import _scientific_checkers as _sc
             if _sc.enabled() and mol.charge == 0:
                 _shift = origin + numpy.array([0.37, 0.0, 0.0])
+                # the re-call must not print (the caller's verbose=0 silences only its own call)
                 _dip2 = dip_moment(mol, dm, unit='AU', origin=_shift,
-                                    verbose=logger.NOTE, _scibench_recall=True)
+                                    verbose=logger.QUIET, _scibench_recall=True)
                 # mol_dip here is always in AU (the Debye rescale below has
                 # not happened yet at this point in the function).
                 _dm_trace = float(numpy.einsum(
