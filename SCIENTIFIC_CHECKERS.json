@@ -64,7 +64,7 @@
       "symbol": "canonicalize"
     },
     {
-      "alarm": "min over the exact and block-symmetrised overlaps of abs(trace(dm s) - nelectron) exceeds 50*eps_in*nao*max(1,max|D|) (project=False) or 50*eps_in*nao*4*max(1,max|D|) (project=True), eps_in = unit roundoff of the coarsest dtype among the density matrix and the stored orbitals (eps64 for float64 storage)",
+      "alarm": "min over the exact and block-symmetrised overlaps of abs(trace(dm s) - n_chk), n_chk = the checkpoint's own occupation total sum(mo_occ) (equal to nelectron within 1e-6 by the precondition), exceeds 50*eps_in*nao*max(1,max|D|) (project=False) or 50*eps_in*nao*4*max(1,max|D|) (project=True), eps_in = unit roundoff of the coarsest dtype among the density matrix and the stored orbitals (eps64 for float64 storage)",
       "family": "chkfile_projection_electron_count",
       "id": "PS-SCF-006",
       "invariant": "trace(dm @ get_ovlp(mol)) == mol.nelectron (2026-10-09: S is the target mol's overlap for project=True and the checkpoint molecule's overlap for project=False, the metric in which the reused orbitals are normalised); for a symmetry-adapted target the trace may equally be taken in the block-symmetrised overlap of that molecule",

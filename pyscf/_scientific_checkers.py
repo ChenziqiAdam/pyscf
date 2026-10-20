@@ -402,13 +402,19 @@ def check_canonicalization_density_invariance(dm_before, dm_after, s, nao, mo_oc
 
 
 @_guard
-def check_chkfile_restore_electron_count(mol, dm, s, project, src=(), s_solver=None):
+def check_chkfile_restore_electron_count(mol, dm, s, project, src=(), s_solver=None, n_target=None):
     """PS-SCF-006: checkpoint-projected initial guess conserves electron count.
 
     ``s`` is the overlap in which the restored orbitals are normalised: the
     target mol's for project=True (orbitals are renormalised there), the
     checkpoint molecule's for project=False (orbitals are reused as stored,
     so a displaced geometry legitimately changes tr(D S_target)).
+
+    ``n_target``: the checkpoint's own occupation total sum(mo_occ) (repair
+    2026-10-24). The hook admits only checkpoints with |sum(mo_occ) - N| < 1e-6;
+    a fixed-N smeared checkpoint carries N only to its mu root find (Be fermi
+    sigma=0.13775: sum(mo_occ) - 4 = -2.6e-11), which the restore must carry
+    over, not repair. Restoration is judged against what was stored.
     """
     tr = np.trace(dm @ s) if dm.ndim == 2 else np.trace(dm[0] @ s) + np.trace(dm[1] @ s)
     nao = mol.nao
@@ -416,10 +422,11 @@ def check_chkfile_restore_electron_count(mol, dm, s, project, src=(), s_solver=N
     dmax = max(1.0, float(np.abs(dm).max()))
     eps = _eps_of(dm, *src)
     tol = 50.0 * eps * nao * dmax if not project else 50.0 * eps * nao * 4 * dmax
-    diff = abs(tr.real - mol.nelectron) if np.iscomplexobj(tr) else abs(tr - mol.nelectron)
+    nelec = mol.nelectron if n_target is None else float(n_target)
+    diff = abs(tr.real - nelec) if np.iscomplexobj(tr) else abs(tr - nelec)
     if s_solver is not None:
         _t = np.trace(dm @ s_solver) if dm.ndim == 2 else np.trace(dm[0] @ s_solver) + np.trace(dm[1] @ s_solver)
-        diff = min(diff, abs(float(np.real(_t)) - mol.nelectron))
+        diff = min(diff, abs(float(np.real(_t)) - nelec))
     trigger_if(diff > tol, "PS-SCF-006", diff=diff, tol=tol, project=bool(project))
 
 

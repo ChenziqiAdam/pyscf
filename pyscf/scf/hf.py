@@ -799,7 +799,10 @@ def init_guess_by_chkfile(mol, chkfile_name, project=None):
                 _sc.check_chkfile_restore_electron_count(mol, numpy.asarray(dm), _s_check, project,
                                                          src=(mo,),
                                                          s_solver=_sc.symm_block_overlap(
-                                                             mol if project else chk_mol, _s_check))
+                                                             mol if project else chk_mol, _s_check),
+                                                         # smeared checkpoints hold N only to the mu
+                                                         # root find: compare with the stored total
+                                                         n_target=_occ_total)
     except Exception:
         pass
 
