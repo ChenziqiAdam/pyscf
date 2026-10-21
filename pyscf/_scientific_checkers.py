@@ -359,7 +359,14 @@ def check_dipole_origin_invariance(mol, dip1, dip2, origin1, origin2, dm_trace=N
             nprim = max([int(mol.bas_nprim(ib)) for ib in range(mol.nbas)] or [1])
         except Exception:
             nprim = 1
-        tol = max(tol, 50.0 * eps64 * nprim * float(el_scale))
+        # int1e_r and int1e_ovlp of a cancelling contraction round to eps*kappa,
+        # not eps (repair 2026-10-26: a [1,-3,3,-1] finite-difference s contraction,
+        # kappa 6.2e5, has <x> + 0.37*S00 = 1.8e-11 = 0.13*eps*kappa); the shared
+        # contraction-cancellation factor of PS-GTO-001 (inf: unrepresentable, silent)
+        kappa = _max_contraction_cancellation(mol)
+        if not np.isfinite(kappa):
+            return
+        tol = max(tol, 50.0 * eps64 * nprim * kappa * float(el_scale))
     trigger_if(diff > tol, "PS-SCF-003", diff=diff, tol=tol)
 
 
@@ -450,7 +457,7 @@ def check_mp2_energy_sign(emp2, e_hf, homo=None, lumo=None):
 
 
 @_guard
-def check_mp2_t2_symmetry(t2, cmax=None):
+def check_mp2_t2_symmetry(t2, cmax=None, mol=None):
     """PS-MP2-002: t2[i,j,a,b] == t2[j,i,b,a].
 
     Canonical MP2's t2 is built once from the AO2MO-transformed ovov
@@ -473,6 +480,16 @@ def check_mp2_t2_symmetry(t2, cmax=None):
     # rounding grows ~ eps * max|C|^4 (~ eps * cond(S)^2 for a redundant basis)
     if cmax is not None:
         tol *= max(1.0, float(cmax)) ** 4
+    # the budget above assumes eps-accurate AO integrals (H2 sweep, kappa = 1); over a
+    # cancelling contraction they round to eps*kappa, and the outcore path evaluates
+    # (ia|jb) and (jb|ia) in separate libcint blocks, so t2 inherits that asymmetry
+    # (repair 2026-10-26: finite-difference s contraction, kappa 6.2e5, outcore
+    # asymmetry 6.2e-11 = 0.45*eps*kappa*max|t2|*max|C|^4; incore 7e-17)
+    if mol is not None:
+        kappa = _max_contraction_cancellation(mol)
+        if not np.isfinite(kappa):
+            return
+        tol *= kappa
     trigger_if(diff > tol, "PS-MP2-002", diff=diff, tol=tol)
 
 
@@ -630,6 +647,13 @@ def _contraction_cancellation(mol):
     primitives, s_ij: their overlap). Normalising a contraction divides by
     its norm, so a rounding error eps in the self-overlap is amplified by
     kappa; kappa == 1 for an uncontracted or same-sign contraction.
+
+    The denominator is itself a cancelling float64 sum of n^2 terms, accurate
+    only to (n^2 + 4) * eps * numerator (summation plus rounding of w and s_ij).
+    kappa is therefore bounded from above with that noise removed, and is inf
+    when the denominator is at the noise level (repair 2026-10-26: a third
+    finite difference of a Gaussian at step 1e-6 has an exact-zero float64
+    denominator, which used to fall back to kappa == 1).
     """
     from scipy.special import gammaln
     ao_loc = mol.ao_loc_nr()
@@ -648,11 +672,27 @@ def _contraction_cancellation(mol):
         for c in coefs.T:
             w = c * np.sqrt(rii)
             ww = w[:, None] * w[None, :]
-            den = abs((ww * sij).sum())
-            if den > 0:
-                k = max(k, float((np.abs(ww) * sij).sum() / den))
+            num = float((np.abs(ww) * sij).sum())
+            den = abs(float((ww * sij).sum())) - (exps.size ** 2 + 4) * eps64 * num
+            k = max(k, num / den) if den > 0 else np.inf
         kap[ao_loc[ib]:ao_loc[ib + 1]] = k
     return kap
+
+
+def _max_contraction_cancellation(mol):
+    """Largest per-AO cancellation factor of mol's basis (1.0 if unavailable).
+
+    Every AO integral over a cancelling contraction is the small difference of
+    primitive integrals, so its rounding is eps * kappa rather than eps
+    (relative to the normalised integral). Checkers whose tolerance budgets
+    eps-accurate AO integrals (derived on bases with kappa ~ 1) multiply that
+    budget by this factor; inf (unrepresentable contraction) silences them.
+    """
+    try:
+        kap = _contraction_cancellation(mol)
+        return float(kap.max()) if kap.size else 1.0
+    except Exception:
+        return 1.0
 
 
 def _screened_integral_mask(mol, lmax=6, exp_min=1e-4):
@@ -737,6 +777,10 @@ def check_ao_self_overlap_normalization(diag_s, mol=None):
     if mol is not None:
         kap = _contraction_cancellation(mol)
         if kap.shape == d.shape:
+            # kappa == inf: the contraction cancels below float64 resolution, so its
+            # normalised self-overlap carries no correct digit (unrepresentable basis)
+            d = np.where(np.isinf(kap), 0.0, d)
+            kap = np.where(np.isinf(kap), 1.0, kap)
             # cancellation inside a contraction amplifies roundoff by kappa
             tol = np.maximum(base, 50.0 * eps64 * kap)  # swept worst diff/(eps*kappa) = 3.6
         # the kernel sums nprim^2 primitive pairs; rounding grows ~eps*nprim
@@ -1140,7 +1184,8 @@ def check_casscf_canonicalization_density_invariance(dm_before, dm_after, s, nao
 # ---------------------------------------------------------------------------
 
 @_guard
-def check_ao2mo_permutation_symmetry(eri, nmo, cond_s, cmax=None, eri_ao_max=None):
+def check_ao2mo_permutation_symmetry(eri, nmo, cond_s, cmax=None, eri_ao_max=None,
+                                     ao_asym=None, ccol1=None):
     """PS-AO2MO-001: same-orbital-set MO-transformed ERI has 8-fold symmetry.
 
     ao2mo.incore's compiled kernel performs two sequential half-transforms
@@ -1172,6 +1217,13 @@ def check_ao2mo_permutation_symmetry(eri, nmo, cond_s, cmax=None, eri_ao_max=Non
     amp = cond_s if cmax is None else max(cond_s, float(cmax) ** 4)
     esc = max(1.0, float(np.abs(eri).max()), 0.0 if eri_ao_max is None else float(eri_ao_max))
     tol = 50.0 * eps64 * nmo ** 1.5 * amp * esc
+    if ao_asym is not None and ccol1 is not None:
+        # the transform is linear: (pq|rs) - (rs|pq) is exactly the MO transform of the
+        # input's own (ij|kl) - (kl|ij), bounded by (max_p sum_i |C_ip|)^4 * max|asym|.
+        # Repair 2026-10-26: libcint s4 integrals over a cancelling contraction
+        # (kappa 6.2e5) are asymmetric by 1.9e-7 before ao2mo runs; symmetrised
+        # first, incore's output asymmetry is 1.1e-14.
+        tol += float(ccol1) ** 4 * float(ao_asym)
     trigger_if(diff > tol, "PS-AO2MO-001", diff=diff, tol=tol)
 
 

@@ -159,9 +159,15 @@ def general(eri_ao, mo_coeffs, verbose=0, compact=True, **kwargs):
             # exact in-scope substitute for cond(S), not merely a proxy.
             cond_s_equiv = numpy.linalg.cond(mo_coeffs[0]) ** 2
             _eri_ao_max = float(numpy.abs(eri_ao).max()) if numpy.size(eri_ao) else 0.0
+            # the input's own bra-ket asymmetry max|(ij|kl) - (kl|ij)|: 0 for s8 (one
+            # stored triangle), measured for an s4 (npair, npair) matrix
+            _ao = numpy.asarray(eri_ao)
+            _ao_asym = (float(numpy.abs(_ao - _ao.T).max())
+                        if _ao.ndim == 2 and _ao.shape[0] == _ao.shape[1] and _ao.size else 0.0)
             _sc.check_ao2mo_permutation_symmetry(
                 eri1, nmo, cond_s_equiv,
-                cmax=float(numpy.abs(mo_coeffs[0]).max()), eri_ao_max=_eri_ao_max)
+                cmax=float(numpy.abs(mo_coeffs[0]).max()), eri_ao_max=_eri_ao_max,
+                ao_asym=_ao_asym, ccol1=float(numpy.abs(mo_coeffs[0]).sum(axis=0).max()))
     except Exception:
         pass
 

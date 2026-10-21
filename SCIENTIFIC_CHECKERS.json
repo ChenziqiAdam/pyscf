@@ -28,7 +28,7 @@
       "symbol": "kernel (observation point)"
     },
     {
-      "alarm": "max(abs(dip1_au - dip2_au)) of the trace-corrected difference exceeds max(50*eps64*nelectron*(shift + rmax), 100*eps64*E), E = max over x of sum_ij |<i|r_x|j>||D_ji| + shift*sum_ij |S_ij||D_ji| (the absolute magnitude of the two electronic contractions); rmax = largest coordinate of any atom relative to either origin; n_ref = max(nelectron, |tr(DS)|) The floor also scales with the longest contraction: tol >= 50*eps64*nprim_max*E.",
+      "alarm": "max(abs(dip1_au - dip2_au)) of the trace-corrected difference exceeds max(50*eps64*nelectron*(shift + rmax), 100*eps64*E), E = max over x of sum_ij |<i|r_x|j>||D_ji| + shift*sum_ij |S_ij||D_ji| (the absolute magnitude of the two electronic contractions); rmax = largest coordinate of any atom relative to either origin; n_ref = max(nelectron, |tr(DS)|) The floor also scales with the longest contraction: tol >= 50*eps64*nprim_max*E. (2026-10-26: the nprim term is 50*eps64*nprim_max*kappa_max*E, kappa_max the largest contraction-cancellation factor of PS-GTO-001; kappa_max = inf (unrepresentable basis) skips the check.)",
       "family": "dipole_origin_invariance",
       "id": "PS-SCF-003",
       "invariant": "dip_moment(mol, dm, origin=o1) == dip_moment(mol, dm, origin=o2) for any o1 != o2 (2026-10-09: for a density with tr(D S) != nelectron the exact shift (tr(D S)-nelectron)*(o2-o1) is subtracted before comparing; for an N-electron density this is the unchanged law)",
@@ -88,7 +88,7 @@
       "symbol": "kernel"
     },
     {
-      "alarm": "max(abs(t2 - t2.transpose(1,0,3,2))) exceeds 50*eps64*nao**1.5*max(1,max|t2|)*max(1,max|C|)**4",
+      "alarm": "max(abs(t2 - t2.transpose(1,0,3,2))) exceeds 50*eps64*nao**1.5*max(1,max|t2|)*max(1,max|C|)**4 (2026-10-26: multiplied by kappa_max, the largest contraction-cancellation factor of mol's basis (PS-GTO-001); kappa_max = inf skips the check.)",
       "family": "mp2_t2_permutation_symmetry",
       "id": "PS-MP2-002",
       "invariant": "t2[i,j,a,b] == t2[j,i,b,a]",
@@ -136,12 +136,12 @@
       "symbol": "get_occ"
     },
     {
-      "alarm": "max(abs(diag(S) - 1)) exceeds 50*4*eps64 (tolerance 2000*eps64) (2026-10-09: per-AO tolerance max(2000*eps64, 50*eps64*kappa), kappa = cancellation factor sum|w_i w_j s_ij|/|sum w_i w_j s_ij| of the AO's contraction; kappa=1 for ordinary bases) Per-AO tolerance also max(., 50*eps64*nprim*kappa), nprim the number of primitives of the AO's shell (unchanged for nprim <= 20).",
+      "alarm": "max(abs(diag(S) - 1)) exceeds 50*4*eps64 (tolerance 2000*eps64) (2026-10-09: per-AO tolerance max(2000*eps64, 50*eps64*kappa), kappa = cancellation factor sum|w_i w_j s_ij|/|sum w_i w_j s_ij| of the AO's contraction; kappa=1 for ordinary bases) Per-AO tolerance also max(., 50*eps64*nprim*kappa), nprim the number of primitives of the AO's shell (unchanged for nprim <= 20). (2026-10-26: kappa is the noise-corrected upper bound sum|w w s| / (|sum w w s| - (n^2+4)*eps64*sum|w w s|); kappa = inf AOs are not checked.)",
       "family": "ao_self_overlap_normalization",
       "id": "PS-GTO-001",
       "invariant": "diag(int1e_ovlp) is close to all-ones",
       "observation_point": "at the end of Mole.build(), after basis parsing/normalization completes",
-      "precondition": "NORMALIZE_GTO enabled (default), spherical basis (cart=False), shells with l <= 6 and all primitive exponents >= 1e-4 (the range of standard basis sets; outside it the integral kernel's small-prefactor screening drops the normalised self-overlap) and raw contraction coefficients whose normalisation integral max|c|^2 * int r^(2l+2) exp(-2 a_min r^2) dr is a normal float64 with eps headroom (coefficients of order 1e+-150 overflow or go subnormal; basis-set coefficients are 1e-6..1e3) -- Cartesian d-and-higher shells excluded pending a separate confirmation read",
+      "precondition": "NORMALIZE_GTO enabled (default), spherical basis (cart=False), shells with l <= 6 and all primitive exponents >= 1e-4 (the range of standard basis sets; outside it the integral kernel's small-prefactor screening drops the normalised self-overlap) and raw contraction coefficients whose normalisation integral max|c|^2 * int r^(2l+2) exp(-2 a_min r^2) dr is a normal float64 with eps headroom (coefficients of order 1e+-150 overflow or go subnormal; basis-set coefficients are 1e-6..1e3) -- Cartesian d-and-higher shells excluded pending a separate confirmation read Contractions whose cancellation factor is unresolvable in float64 (kappa = inf: the self-overlap denominator sum w_i w_j s_ij is at its own summation-noise level (n^2+4)*eps64*sum|w_i w_j s_ij|) are excluded as unrepresentable.",
       "rationale": "PySCF computes AO self-overlap-equals-1 twice through genuinely independent mechanisms: analytically in Python at basis-parsing time (_nomalize_contracted_ao's closed-form Gaussian formula) and numerically via the compiled libcint integral evaluator at runtime -- these share no intermediate computation",
       "scientific_quantity": "self-overlap of a normalized contracted Gaussian AO",
       "source": "pyscf/gto/mole.py",
@@ -292,7 +292,7 @@
       "symbol": "canonicalize"
     },
     {
-      "alarm": "any of the 3 permutation differences exceeds 50*eps64*nmo**1.5*max(cond(C)**2, max|C|**4)*max(1, max|eri_mo|, max|eri_ao|)",
+      "alarm": "any of the 3 permutation differences exceeds 50*eps64*nmo**1.5*max(cond(C)**2, max|C|**4)*max(1, max|eri_mo|, max|eri_ao|) (2026-10-26: plus (max_p sum_i |C_ip|)^4 * max|(ij|kl) - (kl|ij)| of the AO input itself, 0 for s8 input.)",
       "family": "ao2mo_integral_permutation_symmetry",
       "id": "PS-AO2MO-001",
       "invariant": "eri[i,j,k,l] == eri[j,i,k,l] == eri[i,j,l,k] == eri[k,l,i,j] (the 3 independent constraints implying full 8-fold symmetry for this same-orbital-set real case)",

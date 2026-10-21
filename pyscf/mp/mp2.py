@@ -88,7 +88,8 @@ def kernel(mp, mo_energy=None, mo_coeff=None, eris=None, with_t2=WITH_T2, verbos
                 _mo = mo_coeff if mo_coeff is not None else getattr(mp, 'mo_coeff', None)
                 if isinstance(_mo, numpy.ndarray):
                     _cmax = float(numpy.abs(_mo).max())
-                _sc.check_mp2_t2_symmetry(numpy.asarray(t2), cmax=_cmax)
+                _sc.check_mp2_t2_symmetry(numpy.asarray(t2), cmax=_cmax,
+                                          mol=getattr(mp, 'mol', None))
     except Exception:
         pass
 
