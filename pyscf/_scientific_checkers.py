@@ -1317,7 +1317,7 @@ def check_pbc_reciprocal_lattice_duality(a, b, norm_to):
 
 @_guard
 def check_pbc_ewald_algorithm_consistency(e_direct, e_pme, ew_eta=None, ew_cut=None, precision=None,
-                                           charge_sq=None):
+                                           charge_sq=None, charge_sum=None, vol=None):
     """PS-PBC-003: direct-summation and particle-mesh Ewald energies agree.
 
     Two structurally different reciprocal-space routines (a direct Gv-grid
@@ -1338,12 +1338,21 @@ def check_pbc_ewald_algorithm_consistency(e_direct, e_pme, ew_eta=None, ew_cut=N
     # legitimately allows a PME deviation of that size.
     if precision is not None and precision > 1e-6:
         return
+    tail = None
     if ew_eta is not None and ew_cut is not None:
         # The two paths truncate the real-space sum differently (lattice shell vs
-        # sphere r<cut); they agree to ~1.5*erfc(eta*cut) relative, so the 1e-6
-        # law presumes a converged real-space sum.
+        # sphere r<cut); the law presumes a converged real-space sum.
         from scipy.special import erfc
-        if erfc(float(ew_eta) * float(ew_cut)) > 1e-7:
+        if charge_sum is not None and vol is not None and float(vol) > 0:
+            # Energy omitted by the sphere: (1/2) Q^2 (4 pi/V) int_cut^inf r erfc(eta r) dr.
+            # It grows like erfc(eta*cut)*cut/eta, so a pairwise erfc bound alone does
+            # not make it small when eta is small (eta=0.03, eta*cut=4: 6.7e-6).
+            eta, cut = float(ew_eta), float(ew_cut)
+            x = eta * cut
+            integ = (cut * np.exp(-x * x) / (2 * eta * np.sqrt(np.pi))
+                     + (1 / (4 * eta ** 2) - cut ** 2 / 2) * erfc(x))
+            tail = 2 * np.pi * float(charge_sum) ** 2 / float(vol) * integ
+        elif erfc(float(ew_eta) * float(ew_cut)) > 1e-7:
             return
     diff = abs(e_direct - e_pme)
     # The terms of the lattice sum are of order eta/sqrt(pi) * sum(Z^2) (the self
@@ -1353,6 +1362,9 @@ def check_pbc_ewald_algorithm_consistency(e_direct, e_pme, ew_eta=None, ew_cut=N
     if ew_eta is not None and charge_sq is not None:
         scale = max(scale, float(ew_eta) / np.sqrt(np.pi) * float(charge_sq))
     tol = 1e-6 * max(scale, 1e-8)
+    # Require the omitted real-space tail to be well below the claimed agreement.
+    if tail is not None and tail > 0.1 * tol:
+        return
     trigger_if(diff > tol, "PS-PBC-003", diff=diff, tol=tol)
 
 
