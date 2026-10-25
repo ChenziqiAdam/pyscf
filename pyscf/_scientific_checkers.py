@@ -537,7 +537,8 @@ def check_mp2_rdm1_trace(dm1, nelectron, nmo, mo_occ=None, src=()):
 # ---------------------------------------------------------------------------
 
 @_guard
-def check_orbital_irrep_purity(proj_total, mo_norm, cond_s=None, src=(), s=None, symm_orb=None):
+def check_orbital_irrep_purity(proj_total, mo_norm, cond_s=None, src=(), s=None, symm_orb=None,
+                               symm_orb_is_mol=False):
     """PS-SYM-001: the irrep projections of every MO add up to its overlap norm.
 
     label_orb_symm projects each orbital on every irrep of mol.symm_orb with
@@ -574,8 +575,25 @@ def check_orbital_irrep_purity(proj_total, mo_norm, cond_s=None, src=(), s=None,
         lam = float(np.linalg.eigvalsh((s64 + s64.T) / 2).min())
         # allowance only in the symmetry-tolerance regime (a basis that is not a symmetry
         # decomposition of the AO space shifts the shares by O(1) and must still alarm)
-        if 0 < d <= 1e-4 * max(1.0, float(np.linalg.norm(s64, 2))) and lam > 0:
+        s_norm = max(1.0, float(np.linalg.norm(s64, 2)))
+        if 0 < d <= 1e-4 * s_norm and lam > 0:
             tol += d / lam * (1.0 + d / lam)
+        elif 1e-4 * s_norm < d <= 1e-2 * s_norm and len(src) > 0 and symm_orb_is_mol:
+            # Wider symm_geom_tol regime: the d/lambda allowance (a bound on the shift of
+            # the S-norm law) no longer holds, but the projections are exactly the
+            # block-metric norm <mo|S S_blk^-1 S|mo> (rounding only), so compare to that.
+            # Only for the molecule's own mol.symm_orb (the symm_geom_tol cause of d); a
+            # caller-modified basis, an incomplete symm_orb (d = inf) or d > 1e-2 ||S||
+            # keeps the S-norm law.
+            try:
+                mo = np.asarray(src[0])
+                smo = s64 @ mo
+                ref = np.einsum('ki,ki->i', smo.conj(), np.linalg.solve(s_blk, smo)).real
+                cond_blk = float(np.linalg.cond(s_blk))
+                worst = float(np.max(np.abs(proj_total - ref) / np.maximum(np.abs(ref), 1e-300)))
+                tol = max(1e-12, 5.0 * eps64 * max(float(cond_s or 1.0), cond_blk))
+            except (ValueError, np.linalg.LinAlgError):
+                pass
     eps = _eps_of(*src)
     if eps > eps64:
         # reduced-precision orbitals/overlap: projections are defined to their roundoff
