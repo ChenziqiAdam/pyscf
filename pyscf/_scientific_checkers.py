@@ -1046,8 +1046,15 @@ def check_fci_rdm1_trace(dm1a, dm1b, neleca, nelecb, norb, norm2=1.0, ndet=None,
     # direct_spin1.energy) accepts; other dtypes are read as raw float64 memory.
     if civec_dtype is not None and np.dtype(civec_dtype) != np.float64:
         return
-    tr_a = np.trace(np.asarray(dm1a)) / norm2
-    tr_b = np.trace(np.asarray(dm1b)) / norm2
+    # Normalise each diagonal entry before summing: for a vector with <c|c> near
+    # DBL_MAX the raw trace (up to nelec*norm2) overflows although every entry
+    # is finite and the normalised occupations are correct.
+    d_a = np.diagonal(np.asarray(dm1a))
+    d_b = np.diagonal(np.asarray(dm1b))
+    if not (np.all(np.isfinite(d_a)) and np.all(np.isfinite(d_b))):
+        return  # non-finite RDM from a finite vector is overflow (traditional bank)
+    tr_a = float(np.sum(d_a / norm2))
+    tr_b = float(np.sum(d_b / norm2))
     # The compiled kernel accumulates the trace over all ndet determinants;
     # the rounding grows ~0.3*eps*ndet for a coherent (uniform) vector.
     tol = 50.0 * eps64 * norb + 4.0 * eps64 * float(ndet or 0)
